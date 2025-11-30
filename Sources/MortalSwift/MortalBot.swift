@@ -4,7 +4,7 @@ import CLibRiichi
 
 /// Swift wrapper for the Mortal Mahjong AI Bot
 /// Uses libriichi for game state management and Core ML for inference
-public class MortalBot {
+public actor MortalBot {
 
     // MARK: - Constants
 
@@ -13,7 +13,7 @@ public class MortalBot {
     public static let obsWidth = 34
 
     /// Get the URL of the bundled Core ML model
-    public static var bundledModelURL: URL? {
+    public nonisolated static var bundledModelURL: URL? {
         #if SWIFT_PACKAGE
         return Bundle.module.url(forResource: "mortal", withExtension: "mlmodelc")
         #else
@@ -71,11 +71,37 @@ public class MortalBot {
     ///   - playerId: Player seat (0-3)
     ///   - version: Model version (1-4, typically 4)
     ///   - useBundledModel: If true, automatically loads the bundled Core ML model
-    public convenience init(playerId: UInt8, version: UInt32 = 4, useBundledModel: Bool = true) throws {
-        if useBundledModel, let modelURL = Self.bundledModelURL {
-            try self.init(playerId: playerId, version: version, modelURL: modelURL)
-        } else {
-            try self.init(playerId: playerId, version: version, modelURL: nil)
+    public init(playerId: UInt8, version: UInt32 = 4, useBundledModel: Bool = true) throws {
+        guard playerId <= 3 else {
+            throw MortalError.invalidPlayerId(playerId)
+        }
+        guard version >= 1 && version <= 4 else {
+            throw MortalError.invalidVersion(version)
+        }
+
+        self.playerId = playerId
+        self.version = version
+
+        // Get observation shape
+        var channels: Int = 0
+        var width: Int = 0
+        riichi_obs_shape(version, &channels, &width)
+
+        // Allocate buffers
+        self.obsBuffer = [Float](repeating: 0, count: channels * width)
+        self.maskBuffer = [UInt8](repeating: 0, count: Self.actionSpace)
+
+        // Create Rust bot
+        guard let bot = riichi_bot_new(playerId, version) else {
+            throw MortalError.failedToCreateBot
+        }
+        self.rustBot = bot
+
+        // Load Core ML model if provided
+        if useBundledModel, let url = Self.bundledModelURL {
+            let config = MLModelConfiguration()
+            config.computeUnits = .all
+            self.coreMLModel = try MLModel(contentsOf: url, configuration: config)
         }
     }
 
@@ -126,10 +152,10 @@ public class MortalBot {
 
     // MARK: - Public Methods
 
-    /// Process an MJAI event and get the bot's reaction
+    /// Process an MJAI event and get the bot's reaction (async version for background inference)
     /// - Parameter mjaiEvent: MJAI event as JSON string
     /// - Returns: MJAI response as JSON string, or nil if no action needed
-    public func react(mjaiEvent: String) throws -> String? {
+    public func react(mjaiEvent: String) async throws -> String? {
         guard let bot = rustBot else {
             throw MortalError.botNotInitialized
         }
@@ -145,7 +171,7 @@ public class MortalBot {
             // Save the mask BEFORE selecting action, so it can be used for recommendations
             lastMask = maskBuffer
 
-            let actionIdx = try selectAction()
+            let actionIdx = try await selectAction()
 
             // Get the action JSON
             guard let actionJSON = getActionJSON(actionIdx: actionIdx) else {
@@ -160,6 +186,45 @@ public class MortalBot {
 
         case RIICHI_NO_ACTION:
             // No action needed
+            return nil
+
+        case RIICHI_ERROR:
+            throw MortalError.updateFailed
+
+        default:
+            throw MortalError.unknownResult(Int(result.rawValue))
+        }
+    }
+
+    /// Process an MJAI event synchronously (for compatibility, use async version when possible)
+    /// - Parameter mjaiEvent: MJAI event as JSON string
+    /// - Returns: MJAI response as JSON string, or nil if no action needed
+    public func reactSync(mjaiEvent: String) throws -> String? {
+        guard let bot = rustBot else {
+            throw MortalError.botNotInitialized
+        }
+
+        // Update state and get observation/mask
+        let result = mjaiEvent.withCString { cString in
+            riichi_bot_update(bot, cString, &obsBuffer, &maskBuffer)
+        }
+
+        switch result {
+        case RIICHI_ACTION_REQUIRED:
+            // Need to make a decision
+            // Save the mask BEFORE selecting action, so it can be used for recommendations
+            lastMask = maskBuffer
+
+            let actionIdx = try selectActionSync()
+
+            // Get the action JSON
+            guard let actionJSON = getActionJSON(actionIdx: actionIdx) else {
+                throw MortalError.noValidActions
+            }
+
+            return actionJSON
+
+        case RIICHI_NO_ACTION:
             return nil
 
         case RIICHI_ERROR:
@@ -202,8 +267,64 @@ public class MortalBot {
 
     // MARK: - Private Methods
 
-    /// Select action using Core ML or fallback to greedy
-    private func selectAction() throws -> Int {
+    /// Select action using Core ML or fallback to greedy (async version - runs inference in background)
+    private func selectAction() async throws -> Int {
+        // Convert mask to valid action indices
+        let validActions = maskBuffer.enumerated().compactMap { idx, valid in
+            valid != 0 ? idx : nil
+        }
+
+        guard !validActions.isEmpty else {
+            throw MortalError.noValidActions
+        }
+
+        // If no Core ML model, use first valid action (pass if available, else first)
+        guard let model = coreMLModel else {
+            // Prefer pass (45) if available
+            let action = validActions.contains(45) ? 45 : validActions.first!
+            lastSelectedAction = action
+            // Set uniform probabilities for valid actions
+            lastQValues = [Float](repeating: 0, count: Self.actionSpace)
+            lastProbs = [Float](repeating: 0, count: Self.actionSpace)
+            let uniformProb = 1.0 / Float(validActions.count)
+            for a in validActions {
+                lastProbs[a] = uniformProb
+            }
+            return action
+        }
+
+        // Capture values needed for background inference
+        let obsCopy = obsBuffer
+        let maskCopy = maskBuffer
+
+        // Run Core ML inference in background
+        let qValues = try await runInferenceInBackground(model: model, obs: obsCopy, mask: maskCopy)
+
+        // Store Q-values
+        lastQValues = qValues
+
+        // Find best valid action (argmax over valid actions)
+        var bestAction = validActions.first!
+        var bestQ: Float = -.infinity
+
+        for action in validActions {
+            let q = lastQValues[action]
+            if q > bestQ {
+                bestQ = q
+                bestAction = action
+            }
+        }
+
+        lastSelectedAction = bestAction
+
+        // Calculate softmax probabilities for valid actions only
+        lastProbs = calculateSoftmax(qValues: lastQValues, validActions: validActions)
+
+        return bestAction
+    }
+
+    /// Select action synchronously (for compatibility)
+    private func selectActionSync() throws -> Int {
         // Convert mask to valid action indices
         let validActions = maskBuffer.enumerated().compactMap { idx, valid in
             valid != 0 ? idx : nil
@@ -280,6 +401,47 @@ public class MortalBot {
         lastProbs = calculateSoftmax(qValues: lastQValues, validActions: validActions)
 
         return bestAction
+    }
+
+    /// Run Core ML inference in background (nonisolated to avoid blocking actor)
+    private nonisolated func runInferenceInBackground(model: MLModel, obs: [Float], mask: [UInt8]) async throws -> [Float] {
+        try await Task.detached(priority: .userInitiated) {
+            // Prepare input for Core ML
+            let obsArray = try MLMultiArray(shape: [1, NSNumber(value: Self.obsChannels), NSNumber(value: Self.obsWidth)], dataType: .float32)
+            let maskArray = try MLMultiArray(shape: [1, NSNumber(value: Self.actionSpace)], dataType: .float32)
+
+            // Copy observation data
+            for i in 0..<obs.count {
+                obsArray[i] = NSNumber(value: obs[i])
+            }
+
+            // Copy mask data (convert to float)
+            for i in 0..<mask.count {
+                maskArray[i] = NSNumber(value: Float(mask[i]))
+            }
+
+            // Create input dictionary
+            let input = try MLDictionaryFeatureProvider(dictionary: [
+                "obs": obsArray,
+                "mask": maskArray
+            ])
+
+            // Run inference (this is the expensive operation)
+            let output = try model.prediction(from: input)
+
+            // Get Q-values
+            guard let qValuesArray = output.featureValue(for: "q_values")?.multiArrayValue else {
+                throw MortalError.inferenceOutputMissing
+            }
+
+            // Extract Q-values
+            var qValues = [Float](repeating: 0, count: Self.actionSpace)
+            for i in 0..<Self.actionSpace {
+                qValues[i] = qValuesArray[i].floatValue
+            }
+
+            return qValues
+        }.value
     }
 
     /// Calculate softmax probabilities over valid actions

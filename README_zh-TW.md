@@ -29,24 +29,40 @@ dependencies: [
 import MortalSwift
 
 // 1. 初始化 Bot（不帶 Core ML - 使用預設策略）
+let bot = try MortalBot(playerId: 0, version: 4, useBundledModel: false)
+
+// 2. 或使用內建 Core ML 模型（預設）
 let bot = try MortalBot(playerId: 0, version: 4)
 
-// 2. 或帶 Core ML 模型
+// 3. 或使用自訂 Core ML 模型 URL
 let modelURL = Bundle.main.url(forResource: "mortal", withExtension: "mlmodelc")
 let bot = try MortalBot(playerId: 0, version: 4, modelURL: modelURL)
 
-// 3. 處理 MJAI 事件
+// 4. 處理 MJAI 事件（async - 推薦）
 let event = #"{"type":"tsumo","actor":0,"pai":"5m"}"#
-if let response = try bot.react(mjaiEvent: event) {
+if let response = try await bot.react(mjaiEvent: event) {
     print("Bot action: \(response)")
 }
 
-// 4. 取得觀察張量（用於自訂推理）
-let obs = bot.getObservation()   // [Float] - 1012*34 個值
-let mask = bot.getMask()         // [UInt8] - 46 個值 (0/1)
+// 5. 取得觀察張量（用於自訂推理）
+let obs = await bot.getObservation()   // [Float] - 1012*34 個值
+let mask = await bot.getMask()         // [UInt8] - 46 個值 (0/1)
 
-// 5. 手動選擇動作
-let response = bot.selectActionManually(actionIdx: 45)  // Pass
+// 6. 手動選擇動作
+let response = await bot.selectActionManually(actionIdx: 45)  // Pass
+
+// 7. 取得上次推理結果
+let qValues = await bot.getLastQValues()  // Core ML 輸出的 Q 值
+let probs = await bot.getLastProbs()      // Softmax 機率
+```
+
+### 同步 API（相容性用途）
+
+```swift
+// 當無法使用 async 時，使用 reactSync()
+if let response = try bot.reactSync(mjaiEvent: event) {
+    print("Bot action: \(response)")
+}
 ```
 
 ## Package 結構
@@ -71,13 +87,21 @@ MortalSwift/
 
 ### MortalBot
 
-```swift
-public class MortalBot {
-    // 初始化
-    init(playerId: UInt8, version: UInt32 = 4, modelURL: URL? = nil) throws
+`MortalBot` 是一個 **actor**，提供線程安全的非同步麻將 AI 存取。
 
-    // 處理 MJAI 事件，回傳回應 JSON
-    func react(mjaiEvent: String) throws -> String?
+```swift
+public actor MortalBot {
+    // 使用內建模型初始化
+    init(playerId: UInt8, version: UInt32 = 4, useBundledModel: Bool = true) throws
+
+    // 使用自訂模型 URL 初始化
+    init(playerId: UInt8, version: UInt32 = 4, modelURL: URL?) throws
+
+    // 處理 MJAI 事件（async - Core ML 在背景執行）
+    func react(mjaiEvent: String) async throws -> String?
+
+    // 處理 MJAI 事件（sync - 相容性用途）
+    func reactSync(mjaiEvent: String) throws -> String?
 
     // 取得當前觀察張量
     func getObservation() -> [Float]
@@ -90,8 +114,22 @@ public class MortalBot {
 
     // 手動選擇動作
     func selectActionManually(actionIdx: Int) -> String?
+
+    // 取得上次推理結果
+    func getLastQValues() -> [Float]
+    func getLastProbs() -> [Float]
+    func getLastSelectedAction() -> Int
+    func getLastMask() -> [UInt8]
+
+    // 檢查是否已載入 Core ML 模型
+    var hasModel: Bool { get }
+
+    // 取得內建模型 URL
+    static var bundledModelURL: URL? { get }
 }
 ```
+
+> **注意**：由於 `MortalBot` 是 actor，所有方法呼叫在 async 環境中都需要 `await`。
 
 ### MahjongAction
 
@@ -126,7 +164,7 @@ MJAI JSON 事件
 obs: [1012×34], mask: [46]
       ↓
 ┌─────────────────────────┐
-│  Core ML（可選）        │
+│  Core ML（背景執行）    │  ← async, nonisolated
 │  • 神經網路推理         │
 │  • 輸出 Q 值            │
 └─────────────────────────┘
@@ -139,6 +177,21 @@ action_idx: 0-45
 └─────────────────────────┘
       ↓
 MJAI JSON 回應
+```
+
+## 並發架構
+
+`MortalBot` 使用 Swift 現代並發模型：
+
+- **Actor 隔離**：線程安全的狀態管理
+- **非同步推理**：Core ML 透過 `Task.detached` 在背景執行
+- **非阻塞**：UI 執行緒在推理期間不會被阻塞
+
+```
+react() [async, actor-isolated]
+    └── selectAction() [async]
+            └── runInferenceInBackground() [nonisolated]
+                    └── Task.detached { Core ML 推理 }
 ```
 
 ## 需求

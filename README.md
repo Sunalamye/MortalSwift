@@ -29,24 +29,40 @@ Or in Xcode: File → Add Package Dependencies → Enter the repository URL
 import MortalSwift
 
 // 1. Initialize Bot (without Core ML - uses default strategy)
+let bot = try MortalBot(playerId: 0, version: 4, useBundledModel: false)
+
+// 2. Or with bundled Core ML model (default)
 let bot = try MortalBot(playerId: 0, version: 4)
 
-// 2. Or with Core ML model
+// 3. Or with custom Core ML model URL
 let modelURL = Bundle.main.url(forResource: "mortal", withExtension: "mlmodelc")
 let bot = try MortalBot(playerId: 0, version: 4, modelURL: modelURL)
 
-// 3. Process MJAI events
+// 4. Process MJAI events (async - recommended)
 let event = #"{"type":"tsumo","actor":0,"pai":"5m"}"#
-if let response = try bot.react(mjaiEvent: event) {
+if let response = try await bot.react(mjaiEvent: event) {
     print("Bot action: \(response)")
 }
 
-// 4. Get observation tensor (for custom inference)
-let obs = bot.getObservation()   // [Float] - 1012*34 values
-let mask = bot.getMask()         // [UInt8] - 46 values (0/1)
+// 5. Get observation tensor (for custom inference)
+let obs = await bot.getObservation()   // [Float] - 1012*34 values
+let mask = await bot.getMask()         // [UInt8] - 46 values (0/1)
 
-// 5. Manually select action
-let response = bot.selectActionManually(actionIdx: 45)  // Pass
+// 6. Manually select action
+let response = await bot.selectActionManually(actionIdx: 45)  // Pass
+
+// 7. Get last inference results
+let qValues = await bot.getLastQValues()  // Q-values from Core ML
+let probs = await bot.getLastProbs()      // Softmax probabilities
+```
+
+### Sync API (for compatibility)
+
+```swift
+// Use reactSync() when async is not available
+if let response = try bot.reactSync(mjaiEvent: event) {
+    print("Bot action: \(response)")
+}
 ```
 
 ## Package Structure
@@ -71,13 +87,21 @@ MortalSwift/
 
 ### MortalBot
 
-```swift
-public class MortalBot {
-    // Initialize
-    init(playerId: UInt8, version: UInt32 = 4, modelURL: URL? = nil) throws
+`MortalBot` is an **actor** that provides thread-safe async access to the Mahjong AI.
 
-    // Process MJAI event, returns response JSON
-    func react(mjaiEvent: String) throws -> String?
+```swift
+public actor MortalBot {
+    // Initialize with bundled model
+    init(playerId: UInt8, version: UInt32 = 4, useBundledModel: Bool = true) throws
+
+    // Initialize with custom model URL
+    init(playerId: UInt8, version: UInt32 = 4, modelURL: URL?) throws
+
+    // Process MJAI event (async - runs Core ML in background)
+    func react(mjaiEvent: String) async throws -> String?
+
+    // Process MJAI event (sync - for compatibility)
+    func reactSync(mjaiEvent: String) throws -> String?
 
     // Get current observation tensor
     func getObservation() -> [Float]
@@ -90,8 +114,22 @@ public class MortalBot {
 
     // Manually select action
     func selectActionManually(actionIdx: Int) -> String?
+
+    // Get last inference results
+    func getLastQValues() -> [Float]
+    func getLastProbs() -> [Float]
+    func getLastSelectedAction() -> Int
+    func getLastMask() -> [UInt8]
+
+    // Check if Core ML model is loaded
+    var hasModel: Bool { get }
+
+    // Get bundled model URL
+    static var bundledModelURL: URL? { get }
 }
 ```
+
+> **Note**: Since `MortalBot` is an actor, all method calls require `await` in async contexts.
 
 ### MahjongAction
 
@@ -126,7 +164,7 @@ MJAI JSON Event
 obs: [1012×34], mask: [46]
       ↓
 ┌─────────────────────────┐
-│  Core ML (optional)     │
+│  Core ML (background)   │  ← async, nonisolated
 │  • Neural network       │
 │  • Output Q-values      │
 └─────────────────────────┘
@@ -139,6 +177,21 @@ action_idx: 0-45
 └─────────────────────────┘
       ↓
 MJAI JSON Response
+```
+
+## Concurrency Architecture
+
+`MortalBot` uses Swift's modern concurrency model:
+
+- **Actor isolation**: Thread-safe state management
+- **Async inference**: Core ML runs in background via `Task.detached`
+- **Non-blocking**: UI thread is never blocked during inference
+
+```
+react() [async, actor-isolated]
+    └── selectAction() [async]
+            └── runInferenceInBackground() [nonisolated]
+                    └── Task.detached { Core ML inference }
 ```
 
 ## Requirements
