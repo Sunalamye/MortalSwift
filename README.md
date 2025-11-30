@@ -3,65 +3,67 @@
 [![Version](https://img.shields.io/badge/version-0.0.1-blue.svg)](https://github.com/Sunalamye/MortalSwift)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
 
-Swift Package for [Mortal](https://github.com/Equim-chan/Mortal) Mahjong AI - 使用 Rust FFI + Core ML 實現原生 Swift 調用。
+Swift Package for [Mortal](https://github.com/Equim-chan/Mortal) Mahjong AI - Native Swift integration via Rust FFI + Core ML.
 
-> **致謝**: 本項目基於 [Mortal](https://github.com/Equim-chan/Mortal) 麻將 AI，感謝 [Equim-chan](https://github.com/Equim-chan) 開發的優秀項目。
+> **Acknowledgment**: This project is based on [Mortal](https://github.com/Equim-chan/Mortal) Mahjong AI. Thanks to [Equim-chan](https://github.com/Equim-chan) for the amazing project.
 
-## 安装
+**[繁體中文](README_zh-TW.md)**
+
+## Installation
 
 ### Swift Package Manager
 
-在 `Package.swift` 中添加：
+Add to your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(path: "../MortalSwift")  // 或使用 URL
+    .package(url: "https://github.com/Sunalamye/MortalSwift.git", from: "0.0.1")
 ]
 ```
 
-或在 Xcode 中：File → Add Package Dependencies → 添加本地路径
+Or in Xcode: File → Add Package Dependencies → Enter the repository URL
 
-## 使用
+## Usage
 
 ```swift
 import MortalSwift
 
-// 1. 初始化 Bot (不带 Core ML - 使用默认策略)
+// 1. Initialize Bot (without Core ML - uses default strategy)
 let bot = try MortalBot(playerId: 0, version: 4)
 
-// 2. 或带 Core ML 模型
+// 2. Or with Core ML model
 let modelURL = Bundle.main.url(forResource: "mortal", withExtension: "mlmodelc")
 let bot = try MortalBot(playerId: 0, version: 4, modelURL: modelURL)
 
-// 3. 处理 MJAI 事件
+// 3. Process MJAI events
 let event = #"{"type":"tsumo","actor":0,"pai":"5m"}"#
 if let response = try bot.react(mjaiEvent: event) {
     print("Bot action: \(response)")
 }
 
-// 4. 获取观察张量 (用于自定义推理)
-let obs = bot.getObservation()   // [Float] - 1012*34 个值
-let mask = bot.getMask()         // [UInt8] - 46 个值 (0/1)
+// 4. Get observation tensor (for custom inference)
+let obs = bot.getObservation()   // [Float] - 1012*34 values
+let mask = bot.getMask()         // [UInt8] - 46 values (0/1)
 
-// 5. 手动选择动作
+// 5. Manually select action
 let response = bot.selectActionManually(actionIdx: 45)  // Pass
 ```
 
-## Package 结构
+## Package Structure
 
 ```
 MortalSwift/
 ├── Package.swift
 ├── README.md
 └── Sources/
-    ├── CLibRiichi/              # C 库包装
+    ├── CLibRiichi/              # C library wrapper
     │   ├── include/
-    │   │   ├── libriichi.h      # C 头文件
+    │   │   ├── libriichi.h      # C header
     │   │   └── module.modulemap
-    │   ├── libriichi.a          # Rust 静态库 (60MB)
+    │   ├── libriichi.a          # Rust static library
     │   └── shim.c
-    └── MortalSwift/             # Swift 封装
-        ├── MortalBot.swift      # 主要 API
+    └── MortalSwift/             # Swift wrapper
+        ├── MortalBot.swift      # Main API
         └── MortalSwift.swift
 ```
 
@@ -71,22 +73,22 @@ MortalSwift/
 
 ```swift
 public class MortalBot {
-    // 初始化
+    // Initialize
     init(playerId: UInt8, version: UInt32 = 4, modelURL: URL? = nil) throws
 
-    // 处理 MJAI 事件，返回响应 JSON
+    // Process MJAI event, returns response JSON
     func react(mjaiEvent: String) throws -> String?
 
-    // 获取当前观察张量
+    // Get current observation tensor
     func getObservation() -> [Float]
 
-    // 获取当前动作掩码
+    // Get current action mask
     func getMask() -> [UInt8]
 
-    // 获取可用动作 (JSON)
+    // Get available actions (JSON)
     func getCandidates() -> String?
 
-    // 手动选择动作
+    // Manually select action
     func selectActionManually(actionIdx: Int) -> String?
 }
 ```
@@ -95,58 +97,58 @@ public class MortalBot {
 
 ```swift
 public enum MahjongAction: Int {
-    case discard1m = 0   // 打 1 万
-    // ... 0-33: 打牌
-    case riichi = 37     // 立直
-    case chiLow = 38     // 吃 (低)
-    case chiMid = 39     // 吃 (中)
-    case chiHigh = 40    // 吃 (高)
-    case pon = 41        // 碰
-    case kan = 42        // 杠
-    case hora = 43       // 和
-    case ryukyoku = 44   // 流局
-    case pass = 45       // 过
+    case discard1m = 0   // Discard 1-man
+    // ... 0-33: Discard tiles
+    case riichi = 37     // Riichi
+    case chiLow = 38     // Chi (low)
+    case chiMid = 39     // Chi (mid)
+    case chiHigh = 40    // Chi (high)
+    case pon = 41        // Pon
+    case kan = 42        // Kan
+    case hora = 43       // Hora (win)
+    case ryukyoku = 44   // Ryukyoku (draw)
+    case pass = 45       // Pass
 }
 ```
 
-## 数据流
+## Data Flow
 
 ```
-MJAI JSON 事件
+MJAI JSON Event
       ↓
 ┌─────────────────────────┐
 │  libriichi.a (Rust)     │
-│  • 解析事件             │
-│  • 更新游戏状态         │
-│  • 生成观察张量         │
+│  • Parse event          │
+│  • Update game state    │
+│  • Generate obs tensor  │
 └─────────────────────────┘
       ↓
 obs: [1012×34], mask: [46]
       ↓
 ┌─────────────────────────┐
-│  Core ML (可选)         │
-│  • 神经网络推理         │
-│  • 输出 Q 值            │
+│  Core ML (optional)     │
+│  • Neural network       │
+│  • Output Q-values      │
 └─────────────────────────┘
       ↓
 action_idx: 0-45
       ↓
 ┌─────────────────────────┐
 │  libriichi.a (Rust)     │
-│  • 动作索引 → MJAI JSON │
+│  • Action idx → MJAI    │
 └─────────────────────────┘
       ↓
-MJAI JSON 响应
+MJAI JSON Response
 ```
 
-## 要求
+## Requirements
 
 - macOS 13+ / iOS 16+
 - Swift 5.9+
-- Core ML 模型 (可选): `mortal.mlpackage`
+- Core ML model (optional): `mortal.mlmodelc`
 
-## 許可證
+## License
 
-本項目採用 **AGPL-3.0** 授權，與上游 [Mortal](https://github.com/Equim-chan/Mortal) 項目保持一致。
+This project is licensed under **AGPL-3.0**, consistent with the upstream [Mortal](https://github.com/Equim-chan/Mortal) project.
 
-詳見 [LICENSE](LICENSE) 文件。
+See [LICENSE](LICENSE) for details.
