@@ -1,0 +1,5 @@
+module CLibRiichi {
+    header "libriichi.h"
+    link "riichi"
+    export *
+}
