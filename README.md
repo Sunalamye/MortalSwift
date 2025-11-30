@@ -1,6 +1,6 @@
 # MortalSwift
 
-[![Version](https://img.shields.io/badge/version-0.0.1-blue.svg)](https://github.com/Sunalamye/MortalSwift)
+[![Version](https://img.shields.io/badge/version-0.0.2-blue.svg)](https://github.com/Sunalamye/MortalSwift)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
 
 Swift Package for [Mortal](https://github.com/Equim-chan/Mortal) Mahjong AI - Native Swift integration via Rust FFI + Core ML.
