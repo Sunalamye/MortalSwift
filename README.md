@@ -25,6 +25,52 @@ dependencies: [
 
 ## 使用方式
 
+### 強類型 API（推薦）
+
+```swift
+import MortalSwift
+
+// 初始化 Bot
+let bot = try MortalBot(playerId: 0, version: 4)
+
+// 使用強類型事件
+let startGame = MJAIEvent.startGame(StartGameEvent(names: ["P0", "P1", "P2", "P3"]))
+_ = try await bot.react(event: startGame)
+
+let startKyoku = MJAIEvent.startKyoku(StartKyokuEvent(
+    bakaze: .east,
+    kyoku: 1,
+    honba: 0,
+    kyotaku: 0,
+    oya: 0,
+    doraMarker: .pin(3),
+    scores: [25000, 25000, 25000, 25000],
+    tehais: [
+        [.man(1), .man(2), .man(3), .pin(4), .pin(5), .pin(6), .sou(7), .sou(8), .sou(9), .east, .south, .west, .north],
+        [.unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown],
+        // ...
+    ]
+))
+_ = try await bot.react(event: startKyoku)
+
+// 摸牌後取得 AI 建議
+let tsumo = MJAIEvent.tsumo(TsumoEvent(actor: 0, pai: .man(5, red: true)))  // 紅 5 萬
+if let action = try await bot.react(event: tsumo) {
+    switch action {
+    case .dahai(let a):
+        print("打牌: \(a.pai), 摸切: \(a.tsumogiri)")
+    case .reach(let a):
+        print("立直！")
+    case .hora:
+        print("和了！")
+    default:
+        break
+    }
+}
+```
+
+### JSON API
+
 ```swift
 import MortalSwift
 
@@ -60,7 +106,7 @@ let probs = await bot.getLastProbs()      // Softmax 機率
 
 ```swift
 // 當無法使用 async 時，使用 reactSync()
-if let response = try bot.reactSync(mjaiEvent: event) {
+if let response = try await bot.reactSync(mjaiEvent: event) {
     print("Bot action: \(response)")
 }
 ```
@@ -79,6 +125,10 @@ MortalSwift/
     │   ├── libriichi.a          # Rust 靜態函式庫
     │   └── shim.c
     └── MortalSwift/             # Swift 封裝
+        ├── Models/
+        │   ├── Tile.swift       # 麻將牌類型
+        │   ├── MJAIEvent.swift  # MJAI 事件（輸入）
+        │   └── MJAIAction.swift # MJAI 動作（輸出）
         ├── MortalBot.swift      # 主要 API
         └── MortalSwift.swift
 ```
@@ -131,7 +181,88 @@ public actor MortalBot {
 
 > **注意**：由於 `MortalBot` 是 actor，所有方法呼叫在 async 環境中都需要 `await`。
 
-### MahjongAction
+### Tile（麻將牌）
+
+```swift
+public enum Tile: Hashable, Codable, Sendable {
+    // 數牌
+    case man(Int, red: Bool = false)  // 萬子 1-9, red=true 為紅寶牌
+    case pin(Int, red: Bool = false)  // 筒子 1-9
+    case sou(Int, red: Bool = false)  // 索子 1-9
+
+    // 字牌
+    case east, south, west, north     // 風牌
+    case white, green, red            // 三元牌（白發中）
+    case unknown                      // 未知牌（其他玩家的暗牌）
+}
+
+// 使用範例
+let tile1 = Tile.man(5, red: true)    // 紅 5 萬
+let tile2 = Tile.pin(3)               // 3 筒
+let tile3 = Tile.east                 // 東風
+
+// 從 MJAI 字串解析
+let tile = Tile(mjaiString: "5mr")    // 紅 5 萬
+let tile = Tile(mjaiString: "E")      // 東
+
+// 從雀魂格式解析
+let tile = Tile(majsoulString: "0m")  // 紅 5 萬（雀魂用 0 表示紅寶牌）
+let tile = Tile(majsoulString: "1z")  // 東（雀魂用 1z-7z 表示字牌）
+```
+
+### MJAIEvent（輸入事件）
+
+```swift
+public enum MJAIEvent: Codable, Sendable {
+    case startGame(StartGameEvent)       // 遊戲開始
+    case endGame                          // 遊戲結束
+    case startKyoku(StartKyokuEvent)     // 局開始
+    case endKyoku                         // 局結束
+    case tsumo(TsumoEvent)               // 摸牌
+    case dahai(DahaiEvent)               // 打牌
+    case reach(ReachEvent)               // 立直宣告
+    case reachAccepted(ReachAcceptedEvent) // 立直成立
+    case chi(ChiEvent)                   // 吃
+    case pon(PonEvent)                   // 碰
+    case daiminkan(DaiminkanEvent)       // 大明槓
+    case ankan(AnkanEvent)               // 暗槓
+    case kakan(KakanEvent)               // 加槓
+    case dora(DoraEvent)                 // 新寶牌
+    case nukidora(NukidoraEvent)         // 北抜き（三麻）
+    case hora(HoraEvent)                 // 和了
+    case ryukyoku(RyukyokuEvent)         // 流局
+}
+
+// 使用範例
+let event = MJAIEvent.tsumo(TsumoEvent(actor: 0, pai: .man(5)))
+let json = try event.toJSONString()  // 轉換為 JSON
+```
+
+### MJAIAction（輸出動作）
+
+```swift
+public enum MJAIAction: Codable, Sendable {
+    case dahai(DahaiAction)              // 打牌
+    case reach(ReachAction)              // 立直
+    case chi(ChiAction)                  // 吃
+    case pon(PonAction)                  // 碰
+    case daiminkan(DaiminkanAction)      // 大明槓
+    case ankan(AnkanAction)              // 暗槓
+    case kakan(KakanAction)              // 加槓
+    case nukidora(NukidoraAction)        // 北抜き（三麻）
+    case hora(HoraAction)                // 和了
+    case ryukyoku(RyukyokuAction)        // 流局
+    case pass(PassAction)                // 跳過
+}
+
+// 使用範例
+if let action = try await bot.react(event: tsumoEvent) {
+    print("動作類型: \(action.typeName)")  // "dahai", "reach", etc.
+    print("動作者: \(action.actor)")       // 0-3
+}
+```
+
+### MahjongAction（動作索引）
 
 ```swift
 public enum MahjongAction: Int {
