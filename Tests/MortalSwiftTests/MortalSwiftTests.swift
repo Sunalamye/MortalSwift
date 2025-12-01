@@ -465,6 +465,46 @@ import Foundation
     #expect(Wind.east.tile == .east)
     #expect(Wind.fromIndex(0) == .east)
     #expect(Wind.fromIndex(3) == .north)
+    #expect(Wind.east.displayName == "東")
+    #expect(Wind.south.unicode == "🀁")
+}
+
+@Test func testTileUnicode() {
+    #expect(Tile.man(1).unicode == "🀇")
+    #expect(Tile.man(5).unicode == "🀋")
+    #expect(Tile.man(5, red: true).unicode == "🀋")
+    #expect(Tile.pin(1).unicode == "🀙")
+    #expect(Tile.sou(9).unicode == "🀘")
+    #expect(Tile.east.unicode == "🀀")
+    #expect(Tile.white.unicode == "🀆")
+    #expect(Tile.green.unicode == "🀅")
+    #expect(Tile.red.unicode == "🀄")
+    #expect(Tile.unknown.unicode == "🀫")
+}
+
+@Test func testTileDisplayName() {
+    #expect(Tile.man(1).displayName == "一萬")
+    #expect(Tile.man(5, red: true).displayName == "紅五萬")
+    #expect(Tile.pin(3).displayName == "三筒")
+    #expect(Tile.sou(7).displayName == "七索")
+    #expect(Tile.east.displayName == "東")
+    #expect(Tile.white.displayName == "白")
+    #expect(Tile.green.displayName == "發")
+    #expect(Tile.red.displayName == "中")
+}
+
+@Test func testTileMjaiToUnicode() {
+    #expect(Tile.mjaiToUnicode["1m"] == "🀇")
+    #expect(Tile.mjaiToUnicode["5mr"] == "🀋")
+    #expect(Tile.mjaiToUnicode["E"] == "🀀")
+    #expect(Tile.mjaiToUnicode["C"] == "🀄")
+}
+
+@Test func testTileMjaiToDisplayName() {
+    #expect(Tile.mjaiToDisplayName["1m"] == "一萬")
+    #expect(Tile.mjaiToDisplayName["5mr"] == "紅五萬")
+    #expect(Tile.mjaiToDisplayName["E"] == "東")
+    #expect(Tile.mjaiToDisplayName["C"] == "中")
 }
 
 // MARK: - MJAIEvent Tests

@@ -257,6 +257,88 @@ extension Tile: CustomStringConvertible {
     }
 }
 
+// MARK: - Unicode Display
+
+extension Tile {
+    /// Unicode 麻將字符
+    public var unicode: String {
+        switch self {
+        case .man(let n, let red):
+            if red { return "🀋" }
+            return Self.manUnicode[n - 1]
+        case .pin(let n, let red):
+            if red { return "🀝" }
+            return Self.pinUnicode[n - 1]
+        case .sou(let n, let red):
+            if red { return "🀔" }
+            return Self.souUnicode[n - 1]
+        case .east: return "🀀"
+        case .south: return "🀁"
+        case .west: return "🀂"
+        case .north: return "🀃"
+        case .white: return "🀆"
+        case .green: return "🀅"
+        case .red: return "🀄"
+        case .unknown: return "🀫"
+        }
+    }
+
+    /// 中文名稱
+    public var displayName: String {
+        switch self {
+        case .man(let n, let red):
+            let names = ["一萬", "二萬", "三萬", "四萬", "五萬", "六萬", "七萬", "八萬", "九萬"]
+            return red ? "紅\(names[n - 1])" : names[n - 1]
+        case .pin(let n, let red):
+            let names = ["一筒", "二筒", "三筒", "四筒", "五筒", "六筒", "七筒", "八筒", "九筒"]
+            return red ? "紅\(names[n - 1])" : names[n - 1]
+        case .sou(let n, let red):
+            let names = ["一索", "二索", "三索", "四索", "五索", "六索", "七索", "八索", "九索"]
+            return red ? "紅\(names[n - 1])" : names[n - 1]
+        case .east: return "東"
+        case .south: return "南"
+        case .west: return "西"
+        case .north: return "北"
+        case .white: return "白"
+        case .green: return "發"
+        case .red: return "中"
+        case .unknown: return "?"
+        }
+    }
+
+    // MARK: - Unicode Tables
+
+    private static let manUnicode = ["🀇", "🀈", "🀉", "🀊", "🀋", "🀌", "🀍", "🀎", "🀏"]
+    private static let pinUnicode = ["🀙", "🀚", "🀛", "🀜", "🀝", "🀞", "🀟", "🀠", "🀡"]
+    private static let souUnicode = ["🀐", "🀑", "🀒", "🀓", "🀔", "🀕", "🀖", "🀗", "🀘"]
+
+    /// MJAI 字串到 Unicode 的映射表
+    public static let mjaiToUnicode: [String: String] = [
+        "1m": "🀇", "2m": "🀈", "3m": "🀉", "4m": "🀊", "5m": "🀋",
+        "5mr": "🀋", "6m": "🀌", "7m": "🀍", "8m": "🀎", "9m": "🀏",
+        "1p": "🀙", "2p": "🀚", "3p": "🀛", "4p": "🀜", "5p": "🀝",
+        "5pr": "🀝", "6p": "🀞", "7p": "🀟", "8p": "🀠", "9p": "🀡",
+        "1s": "🀐", "2s": "🀑", "3s": "🀒", "4s": "🀓", "5s": "🀔",
+        "5sr": "🀔", "6s": "🀕", "7s": "🀖", "8s": "🀗", "9s": "🀘",
+        "E": "🀀", "S": "🀁", "W": "🀂", "N": "🀃",
+        "P": "🀆", "F": "🀅", "C": "🀄",
+        "?": "🀫"
+    ]
+
+    /// 中文名稱映射表
+    public static let mjaiToDisplayName: [String: String] = [
+        "1m": "一萬", "2m": "二萬", "3m": "三萬", "4m": "四萬", "5m": "五萬",
+        "5mr": "紅五萬", "6m": "六萬", "7m": "七萬", "8m": "八萬", "9m": "九萬",
+        "1p": "一筒", "2p": "二筒", "3p": "三筒", "4p": "四筒", "5p": "五筒",
+        "5pr": "紅五筒", "6p": "六筒", "7p": "七筒", "8p": "八筒", "9p": "九筒",
+        "1s": "一索", "2s": "二索", "3s": "三索", "4s": "四索", "5s": "五索",
+        "5sr": "紅五索", "6s": "六索", "7s": "七索", "8s": "八索", "9s": "九索",
+        "E": "東", "S": "南", "W": "西", "N": "北",
+        "P": "白", "F": "發", "C": "中",
+        "?": "?"
+    ]
+}
+
 // MARK: - Wind
 
 /// 風牌方位
@@ -292,5 +374,20 @@ public enum Wind: String, Codable, Sendable, CaseIterable {
         case 3: return .north
         default: return nil
         }
+    }
+
+    /// 中文名稱
+    public var displayName: String {
+        switch self {
+        case .east: return "東"
+        case .south: return "南"
+        case .west: return "西"
+        case .north: return "北"
+        }
+    }
+
+    /// Unicode 字符
+    public var unicode: String {
+        tile.unicode
     }
 }
