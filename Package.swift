@@ -1,4 +1,4 @@
-// swift-tools-version: 5.9
+// swift-tools-version: 6.0
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
@@ -10,8 +10,8 @@ let packageDir = URL(fileURLWithPath: #file).deletingLastPathComponent().path
 let package = Package(
     name: "MortalSwift",
     platforms: [
-        .macOS(.v13),
-        .iOS(.v16)
+        .macOS(.v14),
+        .iOS(.v17)
     ],
     products: [
         .library(
@@ -47,12 +47,19 @@ let package = Package(
             path: "Sources/MortalSwift",
             resources: [
                 .copy("Resources/mortal.mlmodelc")
+            ],
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+                .enableUpcomingFeature("ExistentialAny")
             ]
         ),
 
         .testTarget(
             name: "MortalSwiftTests",
-            dependencies: ["MortalSwift"]
+            dependencies: ["MortalSwift"],
+            swiftSettings: [
+                .swiftLanguageMode(.v6)
+            ]
         ),
     ]
 )

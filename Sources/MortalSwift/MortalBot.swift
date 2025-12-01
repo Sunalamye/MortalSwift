@@ -1,5 +1,5 @@
 import Foundation
-import CoreML
+@preconcurrency import CoreML
 import CLibRiichi
 
 /// Swift wrapper for the Mortal Mahjong AI Bot
@@ -403,9 +403,14 @@ public actor MortalBot {
         return bestAction
     }
 
-    /// Run Core ML inference in background (nonisolated to avoid blocking actor)
-    private nonisolated func runInferenceInBackground(model: MLModel, obs: [Float], mask: [UInt8]) async throws -> [Float] {
-        try await Task.detached(priority: .userInitiated) {
+    /// Run Core ML inference in background
+    /// Uses nonisolated(unsafe) to allow MLModel access from detached task
+    private func runInferenceInBackground(model: MLModel, obs: [Float], mask: [UInt8]) async throws -> [Float] {
+        // Use nonisolated(unsafe) to safely pass MLModel to background task
+        // MLModel is thread-safe for prediction calls
+        nonisolated(unsafe) let unsafeModel = model
+
+        return try await Task.detached(priority: .userInitiated) {
             // Prepare input for Core ML
             let obsArray = try MLMultiArray(shape: [1, NSNumber(value: Self.obsChannels), NSNumber(value: Self.obsWidth)], dataType: .float32)
             let maskArray = try MLMultiArray(shape: [1, NSNumber(value: Self.actionSpace)], dataType: .float32)
@@ -427,7 +432,7 @@ public actor MortalBot {
             ])
 
             // Run inference (this is the expensive operation)
-            let output = try model.prediction(from: input)
+            let output = try unsafeModel.prediction(from: input)
 
             // Get Q-values
             guard let qValuesArray = output.featureValue(for: "q_values")?.multiArrayValue else {
@@ -487,7 +492,7 @@ public actor MortalBot {
 
 // MARK: - Error Types
 
-public enum MortalError: Error, LocalizedError {
+public enum MortalError: Error, LocalizedError, Sendable {
     case invalidPlayerId(UInt8)
     case invalidVersion(UInt32)
     case failedToCreateBot
@@ -521,7 +526,7 @@ public enum MortalError: Error, LocalizedError {
 
 // MARK: - Action Meanings
 
-public enum MahjongAction: Int, CaseIterable {
+public enum MahjongAction: Int, CaseIterable, Sendable {
     // Discard tiles (0-33)
     case discard1m = 0, discard2m, discard3m, discard4m, discard5m, discard6m, discard7m, discard8m, discard9m
     case discard1p, discard2p, discard3p, discard4p, discard5p, discard6p, discard7p, discard8p, discard9p
