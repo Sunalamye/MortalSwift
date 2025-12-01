@@ -1,0 +1,255 @@
+# MortalSwift
+
+[![Version](https://img.shields.io/badge/version-0.0.3-blue.svg)](https://github.com/Sunalamye/MortalSwift)
+[![Swift](https://img.shields.io/badge/Swift-6.0-orange.svg)](https://swift.org)
+[![Platform](https://img.shields.io/badge/platform-macOS%2014%2B%20%7C%20iOS%2017%2B-lightgrey.svg)](https://developer.apple.com)
+[![License](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
+
+Swift Package for [Mortal](https://github.com/Equim-chan/Mortal) Mahjong AI - Native Swift integration via Rust FFI + Core ML.
+
+> **Acknowledgment**: This project is based on [Mortal](https://github.com/Equim-chan/Mortal) Mahjong AI. Thanks to [Equim-chan](https://github.com/Equim-chan) for the amazing project.
+
+**[繁體中文](README.md)**
+
+## Features
+
+- **Swift 6 Strict Concurrency** - Full support for Swift 6 Strict Concurrency
+- **Actor Isolation** - Thread-safe state management
+- **Async Inference** - Core ML runs in background, non-blocking UI
+- **Sendable Safety** - All public types conform to `Sendable` protocol
+
+## Installation
+
+### Swift Package Manager
+
+Add to your `Package.swift`:
+
+```swift
+dependencies: [
+    .package(url: "https://github.com/Sunalamye/MortalSwift.git", from: "0.0.3")
+]
+```
+
+Or in Xcode: File → Add Package Dependencies → Enter the repository URL
+
+## Usage
+
+```swift
+import MortalSwift
+
+// 1. Initialize Bot (without Core ML - uses default strategy)
+let bot = try MortalBot(playerId: 0, version: 4, useBundledModel: false)
+
+// 2. Or with bundled Core ML model (default)
+let bot = try MortalBot(playerId: 0, version: 4)
+
+// 3. Or with custom Core ML model URL
+let modelURL = Bundle.main.url(forResource: "mortal", withExtension: "mlmodelc")
+let bot = try MortalBot(playerId: 0, version: 4, modelURL: modelURL)
+
+// 4. Process MJAI events (async - recommended)
+let event = #"{"type":"tsumo","actor":0,"pai":"5m"}"#
+if let response = try await bot.react(mjaiEvent: event) {
+    print("Bot action: \(response)")
+}
+
+// 5. Get observation tensor (for custom inference)
+let obs = await bot.getObservation()   // [Float] - 1012*34 values
+let mask = await bot.getMask()         // [UInt8] - 46 values (0/1)
+
+// 6. Manually select action
+let response = await bot.selectActionManually(actionIdx: 45)  // Pass
+
+// 7. Get last inference results
+let qValues = await bot.getLastQValues()  // Q-values from Core ML
+let probs = await bot.getLastProbs()      // Softmax probabilities
+```
+
+### Sync API (for compatibility)
+
+```swift
+// Use reactSync() when async is not available
+if let response = try bot.reactSync(mjaiEvent: event) {
+    print("Bot action: \(response)")
+}
+```
+
+## Package Structure
+
+```
+MortalSwift/
+├── Package.swift
+├── README.md
+└── Sources/
+    ├── CLibRiichi/              # C library wrapper
+    │   ├── include/
+    │   │   ├── libriichi.h      # C header
+    │   │   └── module.modulemap
+    │   ├── libriichi.a          # Rust static library
+    │   └── shim.c
+    └── MortalSwift/             # Swift wrapper
+        ├── MortalBot.swift      # Main API
+        └── MortalSwift.swift
+```
+
+## API
+
+### MortalBot
+
+`MortalBot` is an **actor** that provides thread-safe async access to the Mahjong AI.
+
+```swift
+public actor MortalBot {
+    // Initialize with bundled model
+    init(playerId: UInt8, version: UInt32 = 4, useBundledModel: Bool = true) throws
+
+    // Initialize with custom model URL
+    init(playerId: UInt8, version: UInt32 = 4, modelURL: URL?) throws
+
+    // Process MJAI event (async - runs Core ML in background)
+    func react(mjaiEvent: String) async throws -> String?
+
+    // Process MJAI event (sync - for compatibility)
+    func reactSync(mjaiEvent: String) throws -> String?
+
+    // Get current observation tensor
+    func getObservation() -> [Float]
+
+    // Get current action mask
+    func getMask() -> [UInt8]
+
+    // Get available actions (JSON)
+    func getCandidates() -> String?
+
+    // Manually select action
+    func selectActionManually(actionIdx: Int) -> String?
+
+    // Get last inference results
+    func getLastQValues() -> [Float]
+    func getLastProbs() -> [Float]
+    func getLastSelectedAction() -> Int
+    func getLastMask() -> [UInt8]
+
+    // Check if Core ML model is loaded
+    var hasModel: Bool { get }
+
+    // Get bundled model URL
+    static var bundledModelURL: URL? { get }
+}
+```
+
+> **Note**: Since `MortalBot` is an actor, all method calls require `await` in async contexts.
+
+### MortalError
+
+```swift
+public enum MortalError: Error, LocalizedError, Sendable {
+    case invalidPlayerId(UInt8)      // Invalid player ID
+    case invalidVersion(UInt32)      // Invalid version
+    case failedToCreateBot           // Failed to create bot
+    case botNotInitialized           // Bot not initialized
+    case updateFailed                // Update failed
+    case noValidActions              // No valid actions
+    case inferenceOutputMissing      // Inference output missing
+    case unknownResult(Int)          // Unknown result
+}
+```
+
+### MahjongAction
+
+```swift
+public enum MahjongAction: Int, CaseIterable, Sendable {
+    case discard1m = 0   // Discard 1-man
+    // ... 0-33: Discard tiles
+    case riichi = 37     // Riichi
+    case chiLow = 38     // Chi (low)
+    case chiMid = 39     // Chi (mid)
+    case chiHigh = 40    // Chi (high)
+    case pon = 41        // Pon
+    case kan = 42        // Kan
+    case hora = 43       // Hora (win)
+    case ryukyoku = 44   // Ryukyoku (draw)
+    case pass = 45       // Pass
+}
+```
+
+## Data Flow
+
+```
+MJAI JSON Event
+      ↓
+┌─────────────────────────┐
+│  libriichi.a (Rust)     │
+│  • Parse event          │
+│  • Update game state    │
+│  • Generate obs tensor  │
+└─────────────────────────┘
+      ↓
+obs: [1012×34], mask: [46]
+      ↓
+┌─────────────────────────┐
+│  Core ML (background)   │  ← async, nonisolated(unsafe)
+│  • Neural network       │
+│  • Output Q-values      │
+└─────────────────────────┘
+      ↓
+action_idx: 0-45
+      ↓
+┌─────────────────────────┐
+│  libriichi.a (Rust)     │
+│  • Action idx → MJAI    │
+└─────────────────────────┘
+      ↓
+MJAI JSON Response
+```
+
+## Swift 6 Concurrency Architecture
+
+`MortalBot` uses Swift 6 strict concurrency model:
+
+| Feature | Description |
+|---------|-------------|
+| **Actor Isolation** | All mutable state protected by actor |
+| **Sendable Types** | `MortalError`, `MahjongAction` conform to `Sendable` |
+| **@preconcurrency** | Compatible with non-Sendable CoreML types |
+| **nonisolated(unsafe)** | Safely use MLModel in Task.detached |
+
+```
+react() [async, actor-isolated]
+    └── selectAction() [async]
+            └── runInferenceInBackground() [actor-isolated]
+                    └── Task.detached {
+                            nonisolated(unsafe) MLModel
+                            Core ML inference
+                        }
+```
+
+### Package.swift Configuration
+
+```swift
+// swift-tools-version: 6.0
+.target(
+    name: "MortalSwift",
+    swiftSettings: [
+        .swiftLanguageMode(.v6),
+        .enableUpcomingFeature("ExistentialAny")
+    ]
+)
+```
+
+## Requirements
+
+| Item | Minimum Version |
+|------|-----------------|
+| macOS | 14.0+ |
+| iOS | 17.0+ |
+| Swift | 6.0+ |
+| Xcode | 16.0+ |
+
+Core ML model (optional): `mortal.mlmodelc`
+
+## License
+
+This project is licensed under **AGPL-3.0**, consistent with the upstream [Mortal](https://github.com/Equim-chan/Mortal) project.
+
+See [LICENSE](LICENSE) for details.
