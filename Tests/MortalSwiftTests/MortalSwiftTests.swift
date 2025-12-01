@@ -356,3 +356,386 @@ import Foundation
 
     print("Multiple turns test completed successfully")
 }
+
+// MARK: - Tile Tests
+
+@Test func testTileFromMjaiString() {
+    // 數牌
+    #expect(Tile(mjaiString: "1m") == .man(1))
+    #expect(Tile(mjaiString: "5m") == .man(5))
+    #expect(Tile(mjaiString: "9m") == .man(9))
+    #expect(Tile(mjaiString: "1p") == .pin(1))
+    #expect(Tile(mjaiString: "5p") == .pin(5))
+    #expect(Tile(mjaiString: "1s") == .sou(1))
+    #expect(Tile(mjaiString: "9s") == .sou(9))
+
+    // 紅寶牌
+    #expect(Tile(mjaiString: "5mr") == .man(5, red: true))
+    #expect(Tile(mjaiString: "5pr") == .pin(5, red: true))
+    #expect(Tile(mjaiString: "5sr") == .sou(5, red: true))
+
+    // 字牌
+    #expect(Tile(mjaiString: "E") == .east)
+    #expect(Tile(mjaiString: "S") == .south)
+    #expect(Tile(mjaiString: "W") == .west)
+    #expect(Tile(mjaiString: "N") == .north)
+    #expect(Tile(mjaiString: "P") == .white)
+    #expect(Tile(mjaiString: "F") == .green)
+    #expect(Tile(mjaiString: "C") == .red)
+}
+
+@Test func testTileToMjaiString() {
+    #expect(Tile.man(1).mjaiString == "1m")
+    #expect(Tile.man(5, red: true).mjaiString == "5mr")
+    #expect(Tile.pin(5).mjaiString == "5p")
+    #expect(Tile.sou(9).mjaiString == "9s")
+    #expect(Tile.east.mjaiString == "E")
+    #expect(Tile.white.mjaiString == "P")
+    #expect(Tile.green.mjaiString == "F")
+    #expect(Tile.red.mjaiString == "C")
+}
+
+@Test func testTileFromMajsoulString() {
+    // 紅寶牌用 0 表示
+    #expect(Tile(majsoulString: "0m") == .man(5, red: true))
+    #expect(Tile(majsoulString: "0p") == .pin(5, red: true))
+    #expect(Tile(majsoulString: "0s") == .sou(5, red: true))
+
+    // 一般數牌
+    #expect(Tile(majsoulString: "1m") == .man(1))
+    #expect(Tile(majsoulString: "5p") == .pin(5))
+
+    // 字牌用 z 表示
+    #expect(Tile(majsoulString: "1z") == .east)
+    #expect(Tile(majsoulString: "2z") == .south)
+    #expect(Tile(majsoulString: "3z") == .west)
+    #expect(Tile(majsoulString: "4z") == .north)
+    #expect(Tile(majsoulString: "5z") == .white)
+    #expect(Tile(majsoulString: "6z") == .green)
+    #expect(Tile(majsoulString: "7z") == .red)
+}
+
+@Test func testTileIndex() {
+    #expect(Tile.man(1).index == 0)
+    #expect(Tile.man(9).index == 8)
+    #expect(Tile.pin(1).index == 9)
+    #expect(Tile.sou(1).index == 18)
+    #expect(Tile.east.index == 27)
+    #expect(Tile.red.index == 33)
+}
+
+@Test func testTileFromIndex() {
+    #expect(Tile.fromIndex(0) == .man(1))
+    #expect(Tile.fromIndex(8) == .man(9))
+    #expect(Tile.fromIndex(9) == .pin(1))
+    #expect(Tile.fromIndex(27) == .east)
+    #expect(Tile.fromIndex(33) == .red)
+    #expect(Tile.fromIndex(34) == nil)
+}
+
+@Test func testTileProperties() {
+    #expect(Tile.man(5, red: true).isRed == true)
+    #expect(Tile.man(5).isRed == false)
+    #expect(Tile.east.isHonor == true)
+    #expect(Tile.man(1).isHonor == false)
+    #expect(Tile.east.isWind == true)
+    #expect(Tile.white.isWind == false)
+    #expect(Tile.white.isDragon == true)
+    #expect(Tile.east.isDragon == false)
+}
+
+@Test func testTileCodable() throws {
+    let tile = Tile.man(5, red: true)
+    let encoded = try JSONEncoder().encode(tile)
+    let decoded = try JSONDecoder().decode(Tile.self, from: encoded)
+    #expect(decoded == tile)
+
+    // 解碼字串
+    let json = "\"5mr\""
+    let tileFromJson = try JSONDecoder().decode(Tile.self, from: json.data(using: .utf8)!)
+    #expect(tileFromJson == .man(5, red: true))
+}
+
+// MARK: - Wind Tests
+
+@Test func testWind() {
+    #expect(Wind.east.rawValue == "E")
+    #expect(Wind.south.rawValue == "S")
+    #expect(Wind(rawValue: "E") == .east)
+    #expect(Wind.east.tile == .east)
+    #expect(Wind.fromIndex(0) == .east)
+    #expect(Wind.fromIndex(3) == .north)
+}
+
+// MARK: - MJAIEvent Tests
+
+@Test func testMJAIEventTsumoCodable() throws {
+    let event = MJAIEvent.tsumo(TsumoEvent(actor: 0, pai: .man(5)))
+    let json = try event.toJSONString()
+    #expect(json.contains("\"type\":\"tsumo\""))
+    #expect(json.contains("\"actor\":0"))
+    #expect(json.contains("\"pai\":\"5m\""))
+
+    let decoded = try MJAIEvent.fromJSONString(json)
+    if case .tsumo(let e) = decoded {
+        #expect(e.actor == 0)
+        #expect(e.pai == .man(5))
+    } else {
+        #expect(Bool(false), "Should decode as tsumo event")
+    }
+}
+
+@Test func testMJAIEventDahaiCodable() throws {
+    let event = MJAIEvent.dahai(DahaiEvent(actor: 0, pai: .east, tsumogiri: true, riichi: nil))
+    let json = try event.toJSONString()
+    #expect(json.contains("\"type\":\"dahai\""))
+
+    let decoded = try MJAIEvent.fromJSONString(json)
+    if case .dahai(let e) = decoded {
+        #expect(e.actor == 0)
+        #expect(e.pai == .east)
+        #expect(e.tsumogiri == true)
+    } else {
+        #expect(Bool(false), "Should decode as dahai event")
+    }
+}
+
+@Test func testMJAIEventStartKyokuCodable() throws {
+    let event = MJAIEvent.startKyoku(StartKyokuEvent(
+        bakaze: .east,
+        kyoku: 1,
+        honba: 0,
+        kyotaku: 0,
+        oya: 0,
+        doraMarker: .pin(3),
+        scores: [25000, 25000, 25000, 25000],
+        tehais: [
+            [.man(1), .man(2), .man(3)],
+            [.unknown, .unknown, .unknown],
+            [.unknown, .unknown, .unknown],
+            [.unknown, .unknown, .unknown]
+        ]
+    ))
+
+    let json = try event.toJSONString()
+    #expect(json.contains("\"type\":\"start_kyoku\""))
+    #expect(json.contains("\"bakaze\":\"E\""))
+
+    let decoded = try MJAIEvent.fromJSONString(json)
+    if case .startKyoku(let e) = decoded {
+        #expect(e.bakaze == .east)
+        #expect(e.kyoku == 1)
+        #expect(e.doraMarker == .pin(3))
+    } else {
+        #expect(Bool(false), "Should decode as start_kyoku event")
+    }
+}
+
+@Test func testMJAIEventChiCodable() throws {
+    let event = MJAIEvent.chi(ChiEvent(
+        actor: 0,
+        target: 3,
+        pai: .man(3),
+        consumed: [.man(1), .man(2)]
+    ))
+
+    let json = try event.toJSONString()
+    let decoded = try MJAIEvent.fromJSONString(json)
+
+    if case .chi(let e) = decoded {
+        #expect(e.actor == 0)
+        #expect(e.target == 3)
+        #expect(e.pai == .man(3))
+        #expect(e.consumed.count == 2)
+    } else {
+        #expect(Bool(false), "Should decode as chi event")
+    }
+}
+
+@Test func testMJAIEventTypeName() {
+    #expect(MJAIEvent.tsumo(TsumoEvent(actor: 0, pai: .man(1))).typeName == "tsumo")
+    #expect(MJAIEvent.dahai(DahaiEvent(actor: 0, pai: .man(1), tsumogiri: false)).typeName == "dahai")
+    #expect(MJAIEvent.endGame.typeName == "end_game")
+    #expect(MJAIEvent.endKyoku.typeName == "end_kyoku")
+}
+
+// MARK: - MJAIAction Tests
+
+@Test func testMJAIActionDahaiCodable() throws {
+    let action = MJAIAction.dahai(DahaiAction(actor: 0, pai: .man(5, red: true), tsumogiri: true))
+    let json = try action.toJSONString()
+    #expect(json.contains("\"type\":\"dahai\""))
+    #expect(json.contains("\"pai\":\"5mr\""))
+
+    let decoded = try MJAIAction.fromJSONString(json)
+    if case .dahai(let a) = decoded {
+        #expect(a.actor == 0)
+        #expect(a.pai == .man(5, red: true))
+        #expect(a.tsumogiri == true)
+    } else {
+        #expect(Bool(false), "Should decode as dahai action")
+    }
+}
+
+@Test func testMJAIActionReachCodable() throws {
+    let action = MJAIAction.reach(ReachAction(actor: 0))
+    let json = try action.toJSONString()
+    #expect(json.contains("\"type\":\"reach\""))
+
+    let decoded = try MJAIAction.fromJSONString(json)
+    if case .reach(let a) = decoded {
+        #expect(a.actor == 0)
+    } else {
+        #expect(Bool(false), "Should decode as reach action")
+    }
+}
+
+@Test func testMJAIActionPassCodable() throws {
+    let action = MJAIAction.pass(PassAction(actor: 0))
+    let json = try action.toJSONString()
+    #expect(json.contains("\"type\":\"none\""))
+
+    let decoded = try MJAIAction.fromJSONString(json)
+    if case .pass(let a) = decoded {
+        #expect(a.actor == 0)
+    } else {
+        #expect(Bool(false), "Should decode as pass action")
+    }
+}
+
+@Test func testMJAIActionTypeName() {
+    #expect(MJAIAction.dahai(DahaiAction(actor: 0, pai: .man(1), tsumogiri: false)).typeName == "dahai")
+    #expect(MJAIAction.reach(ReachAction(actor: 0)).typeName == "reach")
+    #expect(MJAIAction.pass(PassAction(actor: 0)).typeName == "none")
+    #expect(MJAIAction.hora(HoraAction(actor: 0, target: 1)).typeName == "hora")
+}
+
+@Test func testMJAIActionActor() {
+    #expect(MJAIAction.dahai(DahaiAction(actor: 2, pai: .man(1), tsumogiri: false)).actor == 2)
+    #expect(MJAIAction.reach(ReachAction(actor: 1)).actor == 1)
+    #expect(MJAIAction.pass(PassAction(actor: 3)).actor == 3)
+}
+
+// MARK: - Typed API Tests
+
+@Test func testTypedReactAPI() async throws {
+    let bot = try MortalBot(playerId: 0, version: 4, useBundledModel: false)
+
+    // Start game with typed event
+    let startGame = MJAIEvent.startGame(StartGameEvent(names: ["P0", "P1", "P2", "P3"]))
+    let response1 = try await bot.react(event: startGame)
+    #expect(response1 == nil, "start_game should not require action")
+
+    // Start kyoku with typed event
+    let startKyoku = MJAIEvent.startKyoku(StartKyokuEvent(
+        bakaze: .east,
+        kyoku: 1,
+        honba: 0,
+        kyotaku: 0,
+        oya: 0,
+        doraMarker: .pin(3),
+        scores: [25000, 25000, 25000, 25000],
+        tehais: [
+            [.man(1), .man(2), .man(3), .pin(4), .pin(5), .pin(6), .sou(7), .sou(8), .sou(9), .east, .south, .west, .north],
+            [.unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown],
+            [.unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown],
+            [.unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown]
+        ]
+    ))
+    let response2 = try await bot.react(event: startKyoku)
+    #expect(response2 == nil, "start_kyoku should not require action")
+
+    // Tsumo with typed event
+    let tsumo = MJAIEvent.tsumo(TsumoEvent(actor: 0, pai: .white))
+    let response3 = try await bot.react(event: tsumo)
+    #expect(response3 != nil, "tsumo by self should require action")
+
+    // Verify response is a valid action type
+    if let action = response3 {
+        switch action {
+        case .dahai(let a):
+            #expect(a.actor == 0, "Actor should be 0")
+            print("Typed API: Bot chose to discard \(a.pai)")
+        case .reach(let a):
+            #expect(a.actor == 0, "Actor should be 0")
+            print("Typed API: Bot chose riichi")
+        default:
+            #expect(Bool(false), "Unexpected action type: \(action.typeName)")
+        }
+    }
+}
+
+@Test func testTypedReactSyncAPI() async throws {
+    let bot = try MortalBot(playerId: 0, version: 4, useBundledModel: false)
+
+    // Start game
+    let startGame = MJAIEvent.startGame(StartGameEvent(names: ["P0", "P1", "P2", "P3"]))
+    _ = try await bot.reactSync(event: startGame)
+
+    // Start kyoku
+    let startKyoku = MJAIEvent.startKyoku(StartKyokuEvent(
+        bakaze: .east,
+        kyoku: 1,
+        honba: 0,
+        kyotaku: 0,
+        oya: 0,
+        doraMarker: .pin(3),
+        scores: [25000, 25000, 25000, 25000],
+        tehais: [
+            [.man(1), .man(2), .man(3), .pin(4), .pin(5), .pin(6), .sou(7), .sou(8), .sou(9), .east, .south, .west, .north],
+            [.unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown],
+            [.unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown],
+            [.unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown]
+        ]
+    ))
+    _ = try await bot.reactSync(event: startKyoku)
+
+    // Tsumo
+    let tsumo = MJAIEvent.tsumo(TsumoEvent(actor: 0, pai: .white))
+    let response = try await bot.reactSync(event: tsumo)
+    #expect(response != nil, "tsumo by self should require action")
+}
+
+@Test func testTypedAPIWithCoreML() async throws {
+    let bot = try MortalBot(playerId: 0, version: 4, useBundledModel: true)
+
+    let hasModel = await bot.hasModel
+    guard hasModel else {
+        print("Skipping typed API Core ML test - model not available")
+        return
+    }
+
+    // Setup with typed events
+    _ = try await bot.react(event: .startGame(StartGameEvent(names: ["P0", "P1", "P2", "P3"])))
+    _ = try await bot.react(event: .startKyoku(StartKyokuEvent(
+        bakaze: .east,
+        kyoku: 1,
+        honba: 0,
+        kyotaku: 0,
+        oya: 0,
+        doraMarker: .sou(5),
+        scores: [25000, 25000, 25000, 25000],
+        tehais: [
+            [.man(1), .man(9), .pin(1), .pin(9), .sou(1), .sou(9), .east, .south, .west, .north, .white, .green, .red],
+            [.unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown],
+            [.unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown],
+            [.unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown]
+        ]
+    )))
+
+    // AI decision
+    let action = try await bot.react(event: .tsumo(TsumoEvent(actor: 0, pai: .man(2))))
+    #expect(action != nil, "Core ML should return action")
+
+    if let action = action {
+        print("Typed API Core ML result: \(action.typeName)")
+        switch action {
+        case .dahai(let a):
+            print("  Discard: \(a.pai), tsumogiri: \(a.tsumogiri)")
+        case .reach:
+            print("  Riichi declared")
+        default:
+            break
+        }
+    }
+}

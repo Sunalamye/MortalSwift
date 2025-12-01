@@ -6,4 +6,4 @@
 @_exported import CLibRiichi
 
 /// Library version
-public let MortalSwiftVersion = "1.0.0"
+public let MortalSwiftVersion = "0.1.0"

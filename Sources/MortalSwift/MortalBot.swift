@@ -150,7 +150,31 @@ public actor MortalBot {
         }
     }
 
-    // MARK: - Public Methods
+    // MARK: - Public Methods (Typed API)
+
+    /// Process an MJAI event and get the bot's reaction (strongly-typed async version)
+    /// - Parameter event: MJAI event
+    /// - Returns: Bot action, or nil if no action needed
+    public func react(event: MJAIEvent) async throws -> MJAIAction? {
+        let jsonString = try event.toJSONString()
+        guard let responseJSON = try await react(mjaiEvent: jsonString) else {
+            return nil
+        }
+        return try MJAIAction.fromJSONString(responseJSON)
+    }
+
+    /// Process an MJAI event synchronously (strongly-typed version)
+    /// - Parameter event: MJAI event
+    /// - Returns: Bot action, or nil if no action needed
+    public func reactSync(event: MJAIEvent) throws -> MJAIAction? {
+        let jsonString = try event.toJSONString()
+        guard let responseJSON = try reactSync(mjaiEvent: jsonString) else {
+            return nil
+        }
+        return try MJAIAction.fromJSONString(responseJSON)
+    }
+
+    // MARK: - Public Methods (JSON API)
 
     /// Process an MJAI event and get the bot's reaction (async version for background inference)
     /// - Parameter mjaiEvent: MJAI event as JSON string
@@ -256,6 +280,16 @@ public actor MortalBot {
         let result = String(cString: cString)
         riichi_string_free(cString)
         return result
+    }
+
+    /// Get available action candidates as typed array
+    public func getCandidateActions() -> [MJAIAction] {
+        guard let json = getCandidates(),
+              let data = json.data(using: .utf8),
+              let array = try? JSONDecoder().decode([MJAIAction].self, from: data) else {
+            return []
+        }
+        return array
     }
 
     /// Manually select an action by index
@@ -496,6 +530,8 @@ public enum MortalError: Error, LocalizedError {
     case noValidActions
     case inferenceOutputMissing
     case unknownResult(Int)
+    case encodingFailed
+    case decodingFailed
 
     public var errorDescription: String? {
         switch self {
@@ -515,6 +551,10 @@ public enum MortalError: Error, LocalizedError {
             return "Core ML inference output missing."
         case .unknownResult(let code):
             return "Unknown result code: \(code)."
+        case .encodingFailed:
+            return "Failed to encode to JSON."
+        case .decodingFailed:
+            return "Failed to decode from JSON."
         }
     }
 }

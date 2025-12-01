@@ -1,6 +1,6 @@
 # MortalSwift
 
-[![Version](https://img.shields.io/badge/version-0.0.2-blue.svg)](https://github.com/Sunalamye/MortalSwift)
+[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/Sunalamye/MortalSwift)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
 
 [Mortal](https://github.com/Equim-chan/Mortal) 麻將 AI 的 Swift Package - 透過 Rust FFI + Core ML 實現原生 Swift 整合。
