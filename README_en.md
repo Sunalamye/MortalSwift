@@ -1,6 +1,7 @@
 # MortalSwift
 
-[![Version](https://img.shields.io/badge/version-0.0.2-blue.svg)](https://github.com/Sunalamye/MortalSwift)
+[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](https://github.com/Sunalamye/MortalSwift)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20iOS-lightgrey.svg)](https://github.com/Sunalamye/MortalSwift)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
 
 Swift Package for [Mortal](https://github.com/Equim-chan/Mortal) Mahjong AI - Native Swift integration via Rust FFI + Core ML.
@@ -17,7 +18,7 @@ Add to your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/Sunalamye/MortalSwift.git", from: "0.0.1")
+    .package(url: "https://github.com/Sunalamye/MortalSwift.git", from: "0.2.0")
 ]
 ```
 
@@ -76,7 +77,10 @@ MortalSwift/
     │   ├── include/
     │   │   ├── libriichi.h      # C header
     │   │   └── module.modulemap
-    │   ├── libriichi.a          # Rust static library
+    │   ├── libriichi.xcframework/  # Multi-platform static library
+    │   │   ├── ios-arm64/          # iOS device (arm64)
+    │   │   ├── ios-arm64-simulator/ # iOS simulator (arm64)
+    │   │   └── macos-arm64/        # macOS (arm64)
     │   └── shim.c
     └── MortalSwift/             # Swift wrapper
         ├── MortalBot.swift      # Main API

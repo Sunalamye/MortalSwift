@@ -1,6 +1,7 @@
 # MortalSwift
 
-[![Version](https://img.shields.io/badge/version-0.1.1-blue.svg)](https://github.com/Sunalamye/MortalSwift)
+[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](https://github.com/Sunalamye/MortalSwift)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20iOS-lightgrey.svg)](https://github.com/Sunalamye/MortalSwift)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
 
 [Mortal](https://github.com/Equim-chan/Mortal) 麻將 AI 的 Swift Package - 透過 Rust FFI + Core ML 實現原生 Swift 整合。
@@ -17,7 +18,7 @@
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/Sunalamye/MortalSwift.git", from: "0.0.1")
+    .package(url: "https://github.com/Sunalamye/MortalSwift.git", from: "0.2.0")
 ]
 ```
 
@@ -122,7 +123,10 @@ MortalSwift/
     │   ├── include/
     │   │   ├── libriichi.h      # C 標頭檔
     │   │   └── module.modulemap
-    │   ├── libriichi.a          # Rust 靜態函式庫
+    │   ├── libriichi.xcframework/  # 多平台靜態函式庫
+    │   │   ├── ios-arm64/          # iOS 裝置 (arm64)
+    │   │   ├── ios-arm64-simulator/ # iOS 模擬器 (arm64)
+    │   │   └── macos-arm64/        # macOS (arm64)
     │   └── shim.c
     └── MortalSwift/             # Swift 封裝
         ├── Models/

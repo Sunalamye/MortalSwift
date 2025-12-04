@@ -20,9 +20,16 @@ let package = Package(
         ),
     ],
     targets: [
-        // C library wrapper for libriichi (now Python-free)
+        // XCFramework binary target for libriichi (supports macOS, iOS device, iOS simulator)
+        .binaryTarget(
+            name: "LibRiichi",
+            path: "Sources/CLibRiichi/libriichi.xcframework"
+        ),
+
+        // C library wrapper for libriichi - multi-platform support
         .target(
             name: "CLibRiichi",
+            dependencies: ["LibRiichi"],
             path: "Sources/CLibRiichi",
             sources: ["shim.c"],
             publicHeadersPath: "include",
@@ -30,13 +37,10 @@ let package = Package(
                 .headerSearchPath("include")
             ],
             linkerSettings: [
-                .linkedLibrary("riichi"),
                 .linkedLibrary("c++"),
-                .linkedLibrary("resolv"),
-                .linkedLibrary("iconv"),
-                .unsafeFlags([
-                    "-L\(packageDir)/Sources/CLibRiichi"
-                ])
+                // resolv is not available on iOS
+                .linkedLibrary("resolv", .when(platforms: [.macOS])),
+                .linkedLibrary("iconv")
             ]
         ),
 
