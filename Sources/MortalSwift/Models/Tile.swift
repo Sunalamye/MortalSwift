@@ -75,6 +75,11 @@ public enum Tile: Hashable, Sendable {
     }
 
     /// 牌的索引 (0-33)，用於 action space
+    /// - 0-8: 萬子 1-9m
+    /// - 9-17: 筒子 1-9p
+    /// - 18-26: 索子 1-9s
+    /// - 27-30: 風牌 E/S/W/N
+    /// - 31-33: 三元牌 P/F/C
     public var index: Int {
         switch self {
         case .man(let n, _): return n - 1        // 0-8
@@ -88,6 +93,115 @@ public enum Tile: Hashable, Sendable {
         case .green: return 32
         case .red: return 33
         case .unknown: return -1
+        }
+    }
+
+    /// 包含紅寶牌的索引 (0-36)
+    /// - 0-33: 同 index
+    /// - 34: 紅五萬 5mr
+    /// - 35: 紅五筒 5pr
+    /// - 36: 紅五索 5sr
+    public var indexWithAka: Int {
+        switch self {
+        case .man(5, red: true): return 34
+        case .pin(5, red: true): return 35
+        case .sou(5, red: true): return 36
+        default: return index
+        }
+    }
+
+    /// 去除紅寶牌標記 (5mr → 5m)
+    public var deaka: Tile {
+        switch self {
+        case .man(5, red: true): return .man(5)
+        case .pin(5, red: true): return .pin(5)
+        case .sou(5, red: true): return .sou(5)
+        default: return self
+        }
+    }
+
+    /// 加上紅寶牌標記 (5m → 5mr)
+    public var akaize: Tile {
+        switch self {
+        case .man(5, red: false): return .man(5, red: true)
+        case .pin(5, red: false): return .pin(5, red: true)
+        case .sou(5, red: false): return .sou(5, red: true)
+        default: return self
+        }
+    }
+
+    /// 是否為幺九牌 (1, 9, 字牌)
+    public var isYaokyuu: Bool {
+        switch self {
+        case .man(let n, _), .pin(let n, _), .sou(let n, _):
+            return n == 1 || n == 9
+        case .east, .south, .west, .north, .white, .green, .red:
+            return true
+        case .unknown:
+            return false
+        }
+    }
+
+    /// 下一張牌 (用於計算寶牌)
+    /// - 萬筒索: 9 → 1
+    /// - 風牌: N → E
+    /// - 三元牌: C → P
+    public var next: Tile {
+        switch self {
+        case .man(let n, _):
+            return .man(n == 9 ? 1 : n + 1)
+        case .pin(let n, _):
+            return .pin(n == 9 ? 1 : n + 1)
+        case .sou(let n, _):
+            return .sou(n == 9 ? 1 : n + 1)
+        case .east: return .south
+        case .south: return .west
+        case .west: return .north
+        case .north: return .east
+        case .white: return .green
+        case .green: return .red
+        case .red: return .white
+        case .unknown: return .unknown
+        }
+    }
+
+    /// 上一張牌
+    public var prev: Tile {
+        switch self {
+        case .man(let n, _):
+            return .man(n == 1 ? 9 : n - 1)
+        case .pin(let n, _):
+            return .pin(n == 1 ? 9 : n - 1)
+        case .sou(let n, _):
+            return .sou(n == 1 ? 9 : n - 1)
+        case .east: return .north
+        case .south: return .east
+        case .west: return .south
+        case .north: return .west
+        case .white: return .red
+        case .green: return .white
+        case .red: return .green
+        case .unknown: return .unknown
+        }
+    }
+
+    /// 數牌的數字 (1-9)，字牌返回 nil
+    public var number: Int? {
+        switch self {
+        case .man(let n, _), .pin(let n, _), .sou(let n, _):
+            return n
+        default:
+            return nil
+        }
+    }
+
+    /// 花色索引 (0=萬, 1=筒, 2=索, 3=字)
+    public var suitIndex: Int {
+        switch self {
+        case .man: return 0
+        case .pin: return 1
+        case .sou: return 2
+        default: return 3
         }
     }
 

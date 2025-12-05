@@ -14,41 +14,21 @@ let package = Package(
         .iOS(.v16)
     ],
     products: [
+        // 純 Swift 實現，無需 Rust FFI
         .library(
             name: "MortalSwift",
             targets: ["MortalSwift"]
         ),
     ],
     targets: [
-        // XCFramework binary target for libriichi (supports macOS, iOS device, iOS simulator)
-        .binaryTarget(
-            name: "LibRiichi",
-            path: "Sources/CLibRiichi/libriichi.xcframework"
-        ),
-
-        // C library wrapper for libriichi - multi-platform support
-        .target(
-            name: "CLibRiichi",
-            dependencies: ["LibRiichi"],
-            path: "Sources/CLibRiichi",
-            sources: ["shim.c"],
-            publicHeadersPath: "include",
-            cSettings: [
-                .headerSearchPath("include")
-            ],
-            linkerSettings: [
-                .linkedLibrary("c++"),
-                // resolv is not available on iOS
-                .linkedLibrary("resolv", .when(platforms: [.macOS])),
-                .linkedLibrary("iconv")
-            ]
-        ),
-
-        // Main Swift target
+        // 主要 Swift target - 純 Swift 實現
         .target(
             name: "MortalSwift",
-            dependencies: ["CLibRiichi"],
+            dependencies: [],
             path: "Sources/MortalSwift",
+            exclude: [
+                "MortalBot.swift"  // 排除舊的 FFI 版本
+            ],
             resources: [
                 .copy("Resources/mortal.mlmodelc")
             ]

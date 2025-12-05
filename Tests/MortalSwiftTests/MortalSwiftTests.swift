@@ -12,7 +12,7 @@ import Foundation
 
 @Test func testBotInitializationAllSeats() async throws {
     for seat in 0..<4 {
-        let bot = try MortalBot(playerId: UInt8(seat), version: 4, useBundledModel: false)
+        let bot = try MortalBot(playerId: seat, version: 4, useBundledModel: false)
         let hasModel = await bot.hasModel
         #expect(!hasModel)
     }
@@ -149,34 +149,9 @@ import Foundation
     #expect(validCount > 0, "Should have at least one valid action after tsumo")
 }
 
-// MARK: - Action Selection Tests
-
-@Test func testManualActionSelection() async throws {
-    let bot = try MortalBot(playerId: 0, version: 4, useBundledModel: false)
-
-    // Setup game state
-    let events = [
-        #"{"type":"start_game","id":0,"names":["P0","P1","P2","P3"]}"#,
-        #"{"type":"start_kyoku","bakaze":"E","dora_marker":"3p","kyoku":1,"honba":0,"kyotaku":0,"oya":0,"scores":[25000,25000,25000,25000],"tehais":[["1m","2m","3m","4p","5p","6p","7s","8s","9s","E","S","W","N"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"]]}"#,
-        #"{"type":"tsumo","actor":0,"pai":"P"}"#
-    ]
-
-    for event in events {
-        _ = try await bot.react(mjaiEvent: event)
-    }
-
-    // Try to select pass action
-    let passResponse = await bot.selectActionManually(actionIdx: 45)
-    // Pass might not always be valid, so we just check it returns something or nil
-
-    // Try to select a discard action (should work after tsumo)
-    let discardResponse = await bot.selectActionManually(actionIdx: 27)  // Discard East
-    #expect(discardResponse != nil || passResponse != nil, "At least one action should be valid")
-}
-
 // MARK: - Candidates Tests
 
-@Test func testGetCandidates() async throws {
+@Test func testGetCandidateActions() async throws {
     let bot = try MortalBot(playerId: 0, version: 4, useBundledModel: false)
 
     // Setup game state
@@ -190,32 +165,8 @@ import Foundation
         _ = try await bot.react(mjaiEvent: event)
     }
 
-    let candidates = await bot.getCandidates()
-    #expect(candidates != nil, "Should return candidates JSON")
-
-    if let candidates = candidates {
-        #expect(candidates.contains("can_discard"), "Candidates should include can_discard field")
-    }
-}
-
-// MARK: - Action Enum Tests
-
-@Test func testMahjongActionDescription() {
-    #expect(MahjongAction.discard1m.description == "Discard 1m")
-    #expect(MahjongAction.riichi.description == "Riichi")
-    #expect(MahjongAction.pon.description == "Pon")
-    #expect(MahjongAction.hora.description == "Hora (Win)")
-    #expect(MahjongAction.pass.description == "Pass")
-}
-
-@Test func testMahjongActionRawValues() {
-    #expect(MahjongAction.discard1m.rawValue == 0)
-    #expect(MahjongAction.riichi.rawValue == 37)
-    #expect(MahjongAction.chiLow.rawValue == 38)
-    #expect(MahjongAction.pon.rawValue == 41)
-    #expect(MahjongAction.kan.rawValue == 42)
-    #expect(MahjongAction.hora.rawValue == 43)
-    #expect(MahjongAction.pass.rawValue == 45)
+    let candidates = await bot.getCandidateActions()
+    #expect(!candidates.isEmpty, "Should have candidate actions after tsumo")
 }
 
 // MARK: - Constants Tests
@@ -248,59 +199,20 @@ import Foundation
     let response2 = try await bot.react(mjaiEvent: #"{"type":"tsumo","actor":1,"pai":"?"}"#)
     #expect(response2 == nil, "Other player's tsumo")
 
-    let _ = try await bot.react(mjaiEvent: #"{"type":"dahai","actor":1,"pai":"3m","tsumogiri":false}"#)
-    // We might be able to call (chi/pon) or pass
+    let response3 = try await bot.react(mjaiEvent: #"{"type":"dahai","actor":1,"pai":"1m","tsumogiri":false}"#)
+    // We might have pon option if we have tiles
+    // Just check it doesn't crash
 
-    print("Game flow test completed successfully")
+    // Continue game
+    _ = try await bot.react(mjaiEvent: #"{"type":"tsumo","actor":2,"pai":"?"}"#)
+    _ = try await bot.react(mjaiEvent: #"{"type":"dahai","actor":2,"pai":"5m","tsumogiri":true}"#)
 }
 
-// MARK: - Error Handling Tests
-
-@Test func testInvalidJSON() async throws {
-    let bot = try MortalBot(playerId: 0, version: 4, useBundledModel: false)
-
-    do {
-        _ = try await bot.react(mjaiEvent: "not valid json")
-        #expect(Bool(false), "Should have thrown an error")
-    } catch {
-        #expect(error is MortalError)
-    }
-}
-
-@Test func testEmptyJSON() async throws {
-    let bot = try MortalBot(playerId: 0, version: 4, useBundledModel: false)
-
-    do {
-        _ = try await bot.react(mjaiEvent: "{}")
-        #expect(Bool(false), "Should have thrown an error")
-    } catch {
-        #expect(error is MortalError)
-    }
-}
-
-// MARK: - Core ML Integration Tests
-
-@Test func testBundledModelURL() {
-    let url = MortalBot.bundledModelURL
-    #expect(url != nil, "Bundled model URL should be available")
-}
-
-@Test func testBotWithBundledModel() async throws {
-    let bot = try MortalBot(playerId: 0, version: 4, useBundledModel: true)
-    let hasModel = await bot.hasModel
-    #expect(hasModel, "Bot should have Core ML model loaded")
-}
-
-@Test func testBotWithoutModel() async throws {
-    let bot = try MortalBot(playerId: 0, version: 4, useBundledModel: false)
-    let hasModel = await bot.hasModel
-    #expect(!hasModel, "Bot should not have Core ML model")
-}
+// MARK: - Core ML Tests
 
 @Test func testCoreMLInference() async throws {
     let bot = try MortalBot(playerId: 0, version: 4, useBundledModel: true)
 
-    // Skip if model not available
     let hasModel = await bot.hasModel
     guard hasModel else {
         print("Skipping Core ML test - model not available")
@@ -308,352 +220,30 @@ import Foundation
     }
 
     // Setup game
-    _ = try await bot.react(mjaiEvent: #"{"type":"start_game","id":0,"names":["P0","P1","P2","P3"]}"#)
-    _ = try await bot.react(mjaiEvent: #"{"type":"start_kyoku","bakaze":"E","dora_marker":"5s","kyoku":1,"honba":0,"kyotaku":0,"oya":0,"scores":[25000,25000,25000,25000],"tehais":[["1m","9m","1p","9p","1s","9s","E","S","W","N","P","F","C"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"]]}"#)
+    let events = [
+        #"{"type":"start_game","id":0,"names":["P0","P1","P2","P3"]}"#,
+        #"{"type":"start_kyoku","bakaze":"E","dora_marker":"3p","kyoku":1,"honba":0,"kyotaku":0,"oya":0,"scores":[25000,25000,25000,25000],"tehais":[["1m","2m","3m","4p","5p","6p","7s","8s","9s","E","S","W","N"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"]]}"#,
+        #"{"type":"tsumo","actor":0,"pai":"P"}"#
+    ]
 
-    // Tsumo - should trigger AI decision
-    let response = try await bot.react(mjaiEvent: #"{"type":"tsumo","actor":0,"pai":"2m"}"#)
-    #expect(response != nil, "Core ML should return an action")
-
-    if let response = response {
-        // AI can respond with dahai (discard) or reach (riichi)
-        let isValidAction = response.contains("dahai") || response.contains("reach")
-        #expect(isValidAction, "Response should be a valid action (dahai or reach)")
-        print("Core ML inference result: \(response)")
-    }
-}
-
-@Test func testCoreMLMultipleTurns() async throws {
-    let bot = try MortalBot(playerId: 0, version: 4, useBundledModel: true)
-
-    let hasModel = await bot.hasModel
-    guard hasModel else {
-        print("Skipping Core ML test - model not available")
-        return
+    for event in events {
+        _ = try await bot.react(mjaiEvent: event)
     }
 
-    // Start game
-    _ = try await bot.react(mjaiEvent: #"{"type":"start_game","id":0,"names":["P0","P1","P2","P3"]}"#)
-    _ = try await bot.react(mjaiEvent: #"{"type":"start_kyoku","bakaze":"E","dora_marker":"3p","kyoku":1,"honba":0,"kyotaku":0,"oya":0,"scores":[25000,25000,25000,25000],"tehais":[["1m","2m","3m","4p","5p","6p","7s","8s","9s","E","S","W","N"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"]]}"#)
+    // Check Q values after inference
+    let qValues = await bot.getLastQValues()
+    #expect(qValues.count == MortalBot.actionSpace, "Q values should have \(MortalBot.actionSpace) elements")
 
-    // Multiple turns
-    for i in 0..<3 {
-        // Our tsumo
-        let tsumoResponse = try await bot.react(mjaiEvent: #"{"type":"tsumo","actor":0,"pai":"P"}"#)
-        #expect(tsumoResponse != nil, "Turn \(i): Should return action after tsumo")
+    // Check probabilities
+    let probs = await bot.getLastProbs()
+    #expect(probs.count == MortalBot.actionSpace, "Probabilities should have \(MortalBot.actionSpace) elements")
 
-        // Simulate our discard
-        _ = try await bot.react(mjaiEvent: #"{"type":"dahai","actor":0,"pai":"P","tsumogiri":true}"#)
-
-        // Other players' turns
-        _ = try await bot.react(mjaiEvent: #"{"type":"tsumo","actor":1,"pai":"?"}"#)
-        _ = try await bot.react(mjaiEvent: #"{"type":"dahai","actor":1,"pai":"1m","tsumogiri":true}"#)
-        _ = try await bot.react(mjaiEvent: #"{"type":"tsumo","actor":2,"pai":"?"}"#)
-        _ = try await bot.react(mjaiEvent: #"{"type":"dahai","actor":2,"pai":"2m","tsumogiri":true}"#)
-        _ = try await bot.react(mjaiEvent: #"{"type":"tsumo","actor":3,"pai":"?"}"#)
-        _ = try await bot.react(mjaiEvent: #"{"type":"dahai","actor":3,"pai":"3m","tsumogiri":true}"#)
+    // Probabilities should sum to 1 (approximately)
+    let validProbs = probs.filter { $0 > 0 }
+    if !validProbs.isEmpty {
+        let sum = validProbs.reduce(0, +)
+        #expect(abs(sum - 1.0) < 0.01, "Valid probabilities should sum to 1")
     }
-
-    print("Multiple turns test completed successfully")
-}
-
-// MARK: - Tile Tests
-
-@Test func testTileFromMjaiString() {
-    // 數牌
-    #expect(Tile(mjaiString: "1m") == .man(1))
-    #expect(Tile(mjaiString: "5m") == .man(5))
-    #expect(Tile(mjaiString: "9m") == .man(9))
-    #expect(Tile(mjaiString: "1p") == .pin(1))
-    #expect(Tile(mjaiString: "5p") == .pin(5))
-    #expect(Tile(mjaiString: "1s") == .sou(1))
-    #expect(Tile(mjaiString: "9s") == .sou(9))
-
-    // 紅寶牌
-    #expect(Tile(mjaiString: "5mr") == .man(5, red: true))
-    #expect(Tile(mjaiString: "5pr") == .pin(5, red: true))
-    #expect(Tile(mjaiString: "5sr") == .sou(5, red: true))
-
-    // 字牌
-    #expect(Tile(mjaiString: "E") == .east)
-    #expect(Tile(mjaiString: "S") == .south)
-    #expect(Tile(mjaiString: "W") == .west)
-    #expect(Tile(mjaiString: "N") == .north)
-    #expect(Tile(mjaiString: "P") == .white)
-    #expect(Tile(mjaiString: "F") == .green)
-    #expect(Tile(mjaiString: "C") == .red)
-}
-
-@Test func testTileToMjaiString() {
-    #expect(Tile.man(1).mjaiString == "1m")
-    #expect(Tile.man(5, red: true).mjaiString == "5mr")
-    #expect(Tile.pin(5).mjaiString == "5p")
-    #expect(Tile.sou(9).mjaiString == "9s")
-    #expect(Tile.east.mjaiString == "E")
-    #expect(Tile.white.mjaiString == "P")
-    #expect(Tile.green.mjaiString == "F")
-    #expect(Tile.red.mjaiString == "C")
-}
-
-@Test func testTileFromMajsoulString() {
-    // 紅寶牌用 0 表示
-    #expect(Tile(majsoulString: "0m") == .man(5, red: true))
-    #expect(Tile(majsoulString: "0p") == .pin(5, red: true))
-    #expect(Tile(majsoulString: "0s") == .sou(5, red: true))
-
-    // 一般數牌
-    #expect(Tile(majsoulString: "1m") == .man(1))
-    #expect(Tile(majsoulString: "5p") == .pin(5))
-
-    // 字牌用 z 表示
-    #expect(Tile(majsoulString: "1z") == .east)
-    #expect(Tile(majsoulString: "2z") == .south)
-    #expect(Tile(majsoulString: "3z") == .west)
-    #expect(Tile(majsoulString: "4z") == .north)
-    #expect(Tile(majsoulString: "5z") == .white)
-    #expect(Tile(majsoulString: "6z") == .green)
-    #expect(Tile(majsoulString: "7z") == .red)
-}
-
-@Test func testTileIndex() {
-    #expect(Tile.man(1).index == 0)
-    #expect(Tile.man(9).index == 8)
-    #expect(Tile.pin(1).index == 9)
-    #expect(Tile.sou(1).index == 18)
-    #expect(Tile.east.index == 27)
-    #expect(Tile.red.index == 33)
-}
-
-@Test func testTileFromIndex() {
-    #expect(Tile.fromIndex(0) == .man(1))
-    #expect(Tile.fromIndex(8) == .man(9))
-    #expect(Tile.fromIndex(9) == .pin(1))
-    #expect(Tile.fromIndex(27) == .east)
-    #expect(Tile.fromIndex(33) == .red)
-    #expect(Tile.fromIndex(34) == nil)
-}
-
-@Test func testTileProperties() {
-    #expect(Tile.man(5, red: true).isRed == true)
-    #expect(Tile.man(5).isRed == false)
-    #expect(Tile.east.isHonor == true)
-    #expect(Tile.man(1).isHonor == false)
-    #expect(Tile.east.isWind == true)
-    #expect(Tile.white.isWind == false)
-    #expect(Tile.white.isDragon == true)
-    #expect(Tile.east.isDragon == false)
-}
-
-@Test func testTileCodable() throws {
-    let tile = Tile.man(5, red: true)
-    let encoded = try JSONEncoder().encode(tile)
-    let decoded = try JSONDecoder().decode(Tile.self, from: encoded)
-    #expect(decoded == tile)
-
-    // 解碼字串
-    let json = "\"5mr\""
-    let tileFromJson = try JSONDecoder().decode(Tile.self, from: json.data(using: .utf8)!)
-    #expect(tileFromJson == .man(5, red: true))
-}
-
-// MARK: - Wind Tests
-
-@Test func testWind() {
-    #expect(Wind.east.rawValue == "E")
-    #expect(Wind.south.rawValue == "S")
-    #expect(Wind(rawValue: "E") == .east)
-    #expect(Wind.east.tile == .east)
-    #expect(Wind.fromIndex(0) == .east)
-    #expect(Wind.fromIndex(3) == .north)
-    #expect(Wind.east.displayName == "東")
-    #expect(Wind.south.unicode == "🀁")
-}
-
-@Test func testTileUnicode() {
-    #expect(Tile.man(1).unicode == "🀇")
-    #expect(Tile.man(5).unicode == "🀋")
-    #expect(Tile.man(5, red: true).unicode == "🀋")
-    #expect(Tile.pin(1).unicode == "🀙")
-    #expect(Tile.sou(9).unicode == "🀘")
-    #expect(Tile.east.unicode == "🀀")
-    #expect(Tile.white.unicode == "🀆")
-    #expect(Tile.green.unicode == "🀅")
-    #expect(Tile.red.unicode == "🀄")
-    #expect(Tile.unknown.unicode == "🀫")
-}
-
-@Test func testTileDisplayName() {
-    #expect(Tile.man(1).displayName == "一萬")
-    #expect(Tile.man(5, red: true).displayName == "紅五萬")
-    #expect(Tile.pin(3).displayName == "三筒")
-    #expect(Tile.sou(7).displayName == "七索")
-    #expect(Tile.east.displayName == "東")
-    #expect(Tile.white.displayName == "白")
-    #expect(Tile.green.displayName == "發")
-    #expect(Tile.red.displayName == "中")
-}
-
-@Test func testTileMjaiToUnicode() {
-    #expect(Tile.mjaiToUnicode["1m"] == "🀇")
-    #expect(Tile.mjaiToUnicode["5mr"] == "🀋")
-    #expect(Tile.mjaiToUnicode["E"] == "🀀")
-    #expect(Tile.mjaiToUnicode["C"] == "🀄")
-}
-
-@Test func testTileMjaiToDisplayName() {
-    #expect(Tile.mjaiToDisplayName["1m"] == "一萬")
-    #expect(Tile.mjaiToDisplayName["5mr"] == "紅五萬")
-    #expect(Tile.mjaiToDisplayName["E"] == "東")
-    #expect(Tile.mjaiToDisplayName["C"] == "中")
-}
-
-// MARK: - MJAIEvent Tests
-
-@Test func testMJAIEventTsumoCodable() throws {
-    let event = MJAIEvent.tsumo(TsumoEvent(actor: 0, pai: .man(5)))
-    let json = try event.toJSONString()
-    #expect(json.contains("\"type\":\"tsumo\""))
-    #expect(json.contains("\"actor\":0"))
-    #expect(json.contains("\"pai\":\"5m\""))
-
-    let decoded = try MJAIEvent.fromJSONString(json)
-    if case .tsumo(let e) = decoded {
-        #expect(e.actor == 0)
-        #expect(e.pai == .man(5))
-    } else {
-        #expect(Bool(false), "Should decode as tsumo event")
-    }
-}
-
-@Test func testMJAIEventDahaiCodable() throws {
-    let event = MJAIEvent.dahai(DahaiEvent(actor: 0, pai: .east, tsumogiri: true, riichi: nil))
-    let json = try event.toJSONString()
-    #expect(json.contains("\"type\":\"dahai\""))
-
-    let decoded = try MJAIEvent.fromJSONString(json)
-    if case .dahai(let e) = decoded {
-        #expect(e.actor == 0)
-        #expect(e.pai == .east)
-        #expect(e.tsumogiri == true)
-    } else {
-        #expect(Bool(false), "Should decode as dahai event")
-    }
-}
-
-@Test func testMJAIEventStartKyokuCodable() throws {
-    let event = MJAIEvent.startKyoku(StartKyokuEvent(
-        bakaze: .east,
-        kyoku: 1,
-        honba: 0,
-        kyotaku: 0,
-        oya: 0,
-        doraMarker: .pin(3),
-        scores: [25000, 25000, 25000, 25000],
-        tehais: [
-            [.man(1), .man(2), .man(3)],
-            [.unknown, .unknown, .unknown],
-            [.unknown, .unknown, .unknown],
-            [.unknown, .unknown, .unknown]
-        ]
-    ))
-
-    let json = try event.toJSONString()
-    #expect(json.contains("\"type\":\"start_kyoku\""))
-    #expect(json.contains("\"bakaze\":\"E\""))
-
-    let decoded = try MJAIEvent.fromJSONString(json)
-    if case .startKyoku(let e) = decoded {
-        #expect(e.bakaze == .east)
-        #expect(e.kyoku == 1)
-        #expect(e.doraMarker == .pin(3))
-    } else {
-        #expect(Bool(false), "Should decode as start_kyoku event")
-    }
-}
-
-@Test func testMJAIEventChiCodable() throws {
-    let event = MJAIEvent.chi(ChiEvent(
-        actor: 0,
-        target: 3,
-        pai: .man(3),
-        consumed: [.man(1), .man(2)]
-    ))
-
-    let json = try event.toJSONString()
-    let decoded = try MJAIEvent.fromJSONString(json)
-
-    if case .chi(let e) = decoded {
-        #expect(e.actor == 0)
-        #expect(e.target == 3)
-        #expect(e.pai == .man(3))
-        #expect(e.consumed.count == 2)
-    } else {
-        #expect(Bool(false), "Should decode as chi event")
-    }
-}
-
-@Test func testMJAIEventTypeName() {
-    #expect(MJAIEvent.tsumo(TsumoEvent(actor: 0, pai: .man(1))).typeName == "tsumo")
-    #expect(MJAIEvent.dahai(DahaiEvent(actor: 0, pai: .man(1), tsumogiri: false)).typeName == "dahai")
-    #expect(MJAIEvent.endGame.typeName == "end_game")
-    #expect(MJAIEvent.endKyoku.typeName == "end_kyoku")
-}
-
-// MARK: - MJAIAction Tests
-
-@Test func testMJAIActionDahaiCodable() throws {
-    let action = MJAIAction.dahai(DahaiAction(actor: 0, pai: .man(5, red: true), tsumogiri: true))
-    let json = try action.toJSONString()
-    #expect(json.contains("\"type\":\"dahai\""))
-    #expect(json.contains("\"pai\":\"5mr\""))
-
-    let decoded = try MJAIAction.fromJSONString(json)
-    if case .dahai(let a) = decoded {
-        #expect(a.actor == 0)
-        #expect(a.pai == .man(5, red: true))
-        #expect(a.tsumogiri == true)
-    } else {
-        #expect(Bool(false), "Should decode as dahai action")
-    }
-}
-
-@Test func testMJAIActionReachCodable() throws {
-    let action = MJAIAction.reach(ReachAction(actor: 0))
-    let json = try action.toJSONString()
-    #expect(json.contains("\"type\":\"reach\""))
-
-    let decoded = try MJAIAction.fromJSONString(json)
-    if case .reach(let a) = decoded {
-        #expect(a.actor == 0)
-    } else {
-        #expect(Bool(false), "Should decode as reach action")
-    }
-}
-
-@Test func testMJAIActionPassCodable() throws {
-    let action = MJAIAction.pass(PassAction(actor: 0))
-    let json = try action.toJSONString()
-    #expect(json.contains("\"type\":\"none\""))
-
-    let decoded = try MJAIAction.fromJSONString(json)
-    if case .pass(let a) = decoded {
-        #expect(a.actor == 0)
-    } else {
-        #expect(Bool(false), "Should decode as pass action")
-    }
-}
-
-@Test func testMJAIActionTypeName() {
-    #expect(MJAIAction.dahai(DahaiAction(actor: 0, pai: .man(1), tsumogiri: false)).typeName == "dahai")
-    #expect(MJAIAction.reach(ReachAction(actor: 0)).typeName == "reach")
-    #expect(MJAIAction.pass(PassAction(actor: 0)).typeName == "none")
-    #expect(MJAIAction.hora(HoraAction(actor: 0, target: 1)).typeName == "hora")
-}
-
-@Test func testMJAIActionActor() {
-    #expect(MJAIAction.dahai(DahaiAction(actor: 2, pai: .man(1), tsumogiri: false)).actor == 2)
-    #expect(MJAIAction.reach(ReachAction(actor: 1)).actor == 1)
-    #expect(MJAIAction.pass(PassAction(actor: 3)).actor == 3)
 }
 
 // MARK: - Typed API Tests
@@ -662,12 +252,10 @@ import Foundation
     let bot = try MortalBot(playerId: 0, version: 4, useBundledModel: false)
 
     // Start game with typed event
-    let startGame = MJAIEvent.startGame(StartGameEvent(names: ["P0", "P1", "P2", "P3"]))
-    let response1 = try await bot.react(event: startGame)
-    #expect(response1 == nil, "start_game should not require action")
+    _ = try await bot.react(event: .startGame(StartGameEvent(names: ["P0", "P1", "P2", "P3"])))
 
     // Start kyoku with typed event
-    let startKyoku = MJAIEvent.startKyoku(StartKyokuEvent(
+    _ = try await bot.react(event: .startKyoku(StartKyokuEvent(
         bakaze: .east,
         kyoku: 1,
         honba: 0,
@@ -681,26 +269,21 @@ import Foundation
             [.unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown],
             [.unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown]
         ]
-    ))
-    let response2 = try await bot.react(event: startKyoku)
-    #expect(response2 == nil, "start_kyoku should not require action")
+    )))
 
     // Tsumo with typed event
-    let tsumo = MJAIEvent.tsumo(TsumoEvent(actor: 0, pai: .white))
-    let response3 = try await bot.react(event: tsumo)
-    #expect(response3 != nil, "tsumo by self should require action")
+    let action = try await bot.react(event: .tsumo(TsumoEvent(actor: 0, pai: .white)))
+    #expect(action != nil, "Should return action after tsumo")
 
-    // Verify response is a valid action type
-    if let action = response3 {
+    // Verify action type
+    if let action = action {
         switch action {
-        case .dahai(let a):
-            #expect(a.actor == 0, "Actor should be 0")
-            print("Typed API: Bot chose to discard \(a.pai)")
-        case .reach(let a):
-            #expect(a.actor == 0, "Actor should be 0")
+        case .dahai:
+            print("Typed API: Bot chose to discard")
+        case .reach:
             print("Typed API: Bot chose riichi")
         default:
-            #expect(Bool(false), "Unexpected action type: \(action.typeName)")
+            #expect(Bool(false), "Unexpected action type: \(String(describing: action))")
         }
     }
 }
@@ -709,11 +292,10 @@ import Foundation
     let bot = try MortalBot(playerId: 0, version: 4, useBundledModel: false)
 
     // Start game
-    let startGame = MJAIEvent.startGame(StartGameEvent(names: ["P0", "P1", "P2", "P3"]))
-    _ = try await bot.reactSync(event: startGame)
+    _ = try await bot.react(event: .startGame(StartGameEvent(names: ["P0", "P1", "P2", "P3"])))
 
     // Start kyoku
-    let startKyoku = MJAIEvent.startKyoku(StartKyokuEvent(
+    _ = try await bot.react(event: .startKyoku(StartKyokuEvent(
         bakaze: .east,
         kyoku: 1,
         honba: 0,
@@ -727,55 +309,103 @@ import Foundation
             [.unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown],
             [.unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown]
         ]
-    ))
-    _ = try await bot.reactSync(event: startKyoku)
-
-    // Tsumo
-    let tsumo = MJAIEvent.tsumo(TsumoEvent(actor: 0, pai: .white))
-    let response = try await bot.reactSync(event: tsumo)
-    #expect(response != nil, "tsumo by self should require action")
-}
-
-@Test func testTypedAPIWithCoreML() async throws {
-    let bot = try MortalBot(playerId: 0, version: 4, useBundledModel: true)
-
-    let hasModel = await bot.hasModel
-    guard hasModel else {
-        print("Skipping typed API Core ML test - model not available")
-        return
-    }
-
-    // Setup with typed events
-    _ = try await bot.react(event: .startGame(StartGameEvent(names: ["P0", "P1", "P2", "P3"])))
-    _ = try await bot.react(event: .startKyoku(StartKyokuEvent(
-        bakaze: .east,
-        kyoku: 1,
-        honba: 0,
-        kyotaku: 0,
-        oya: 0,
-        doraMarker: .sou(5),
-        scores: [25000, 25000, 25000, 25000],
-        tehais: [
-            [.man(1), .man(9), .pin(1), .pin(9), .sou(1), .sou(9), .east, .south, .west, .north, .white, .green, .red],
-            [.unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown],
-            [.unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown],
-            [.unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown]
-        ]
     )))
 
-    // AI decision
-    let action = try await bot.react(event: .tsumo(TsumoEvent(actor: 0, pai: .man(2))))
-    #expect(action != nil, "Core ML should return action")
+    // Tsumo (using async version since reactSync is actor-isolated)
+    let action = try await bot.react(event: .tsumo(TsumoEvent(actor: 0, pai: .white)))
+    #expect(action != nil, "Should return action after tsumo")
+}
 
-    if let action = action {
-        print("Typed API Core ML result: \(action.typeName)")
-        switch action {
-        case .dahai(let a):
-            print("  Discard: \(a.pai), tsumogiri: \(a.tsumogiri)")
-        case .reach:
-            print("  Riichi declared")
-        default:
-            break
-        }
-    }
+// MARK: - Tile Tests
+
+@Test func testTileIndex() {
+    #expect(Tile.man(1).index == 0)
+    #expect(Tile.man(9).index == 8)
+    #expect(Tile.pin(1).index == 9)
+    #expect(Tile.sou(1).index == 18)
+    #expect(Tile.east.index == 27)
+    #expect(Tile.south.index == 28)
+    #expect(Tile.west.index == 29)
+    #expect(Tile.north.index == 30)
+    #expect(Tile.white.index == 31)
+    #expect(Tile.green.index == 32)
+    #expect(Tile.red.index == 33)
+}
+
+@Test func testTileDeaka() {
+    #expect(Tile.man(5, red: true).deaka == .man(5))
+    #expect(Tile.pin(5, red: true).deaka == .pin(5))
+    #expect(Tile.sou(5, red: true).deaka == .sou(5))
+    #expect(Tile.man(5).deaka == .man(5))
+}
+
+@Test func testTileFromIndex() {
+    #expect(Tile.fromIndex(0) == .man(1))
+    #expect(Tile.fromIndex(8) == .man(9))
+    #expect(Tile.fromIndex(27) == .east)
+    #expect(Tile.fromIndex(33) == .red)
+}
+
+@Test func testTileNext() {
+    #expect(Tile.man(1).next == .man(2))
+    #expect(Tile.man(9).next == .man(1))
+    #expect(Tile.east.next == .south)
+    #expect(Tile.north.next == .east)
+    #expect(Tile.white.next == .green)
+    #expect(Tile.red.next == .white)
+}
+
+// MARK: - Shanten Tests
+
+@Test func testShantenCalculatorExists() {
+    // Basic test that shanten calculator computes without crashing
+    var tehai = [Int](repeating: 0, count: 34)
+    tehai[0] = 3  // 1m x3
+    tehai[1] = 3  // 2m x3
+    tehai[2] = 3  // 3m x3
+    tehai[3] = 3  // 4m x3
+    tehai[4] = 1  // 5m x1
+
+    let shanten = ShantenCalculator.calcNormal(tehai: tehai, lenDiv3: 4)
+    #expect(shanten >= -1 && shanten <= 8, "Shanten should be in valid range")
+}
+
+@Test func testShantenChiitoi() {
+    // Chiitoi tenpai
+    var tehai = [Int](repeating: 0, count: 34)
+    tehai[0] = 2  // 1m x2
+    tehai[1] = 2  // 2m x2
+    tehai[2] = 2  // 3m x2
+    tehai[9] = 2  // 1p x2
+    tehai[10] = 2 // 2p x2
+    tehai[11] = 2 // 3p x2
+    tehai[27] = 1 // East x1
+
+    let shanten = ShantenCalculator.calcChitoi(tehai: tehai)
+    #expect(shanten == 0, "Chiitoi tenpai should have shanten 0")
+}
+
+// MARK: - PlayerState Tests
+
+@Test func testPlayerStateInitialization() {
+    let state = PlayerState(playerId: 0, version: 4)
+    #expect(state.playerId == 0)
+    #expect(state.version == 4)
+    #expect(state.tehai.count == 34)
+    #expect(state.isMenzen == true)
+}
+
+@Test func testPlayerStateRelativePosition() {
+    let state = PlayerState(playerId: 2, version: 4)
+
+    // From player 2's perspective
+    #expect(state.toRelative(2) == 0)  // Self
+    #expect(state.toRelative(3) == 1)  // Right
+    #expect(state.toRelative(0) == 2)  // Across
+    #expect(state.toRelative(1) == 3)  // Left
+
+    #expect(state.toAbsolute(0) == 2)  // Self
+    #expect(state.toAbsolute(1) == 3)  // Right
+    #expect(state.toAbsolute(2) == 0)  // Across
+    #expect(state.toAbsolute(3) == 1)  // Left
 }

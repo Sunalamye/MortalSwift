@@ -1,9 +1,12 @@
-// MortalSwift - Swift wrapper for Mortal Mahjong AI
+// MortalSwift - Pure Swift Mortal Mahjong AI
 //
 // This package provides a Swift interface to the Mortal AI engine,
-// using libriichi (Rust) for game state management and Core ML for inference.
+// using pure Swift for game state management and Core ML for inference.
 
-@_exported import CLibRiichi
+import Foundation
 
 /// Library version
-public let MortalSwiftVersion = "0.1.1"
+public let MortalSwiftVersion = "0.3.0"
+
+/// Backward compatibility alias for NativeMortalBot
+public typealias MortalBot = NativeMortalBot
