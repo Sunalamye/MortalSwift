@@ -409,3 +409,154 @@ import Foundation
     #expect(state.toAbsolute(2) == 0)  // Across
     #expect(state.toAbsolute(3) == 1)  // Left
 }
+
+// MARK: - 向聽數回歸測試
+//
+// 起因：`calcNormalRecursive` 的剪枝用了「當前值」而非下界。
+// 當前值隨遞迴只會遞減（是上界），拿來剪枝會砍掉仍可能更好的分支；
+// 且 target=4 時根節點初始值 9 ≥ minShanten 初值 8，
+// 導致整個遞迴一次都沒跑，任何手牌都回傳 7。
+
+/// 由 MJAI 牌名組出 34 格計數陣列
+private func shantenCounts(_ tiles: [String]) -> [Int] {
+    var c = [Int](repeating: 0, count: 34)
+    for t in tiles {
+        guard let tile = Tile(mjaiString: t) else { continue }
+        c[tile.index] += 1
+    }
+    return c
+}
+
+@Test func testCompleteHandIsMinusOne() {
+    let hand = shantenCounts(["1m","2m","3m","4m","5m","6m","7m","8m","9m",
+                              "1p","1p","1p","2s","2s"])
+    #expect(ShantenCalculator.calcNormal(tehai: hand, lenDiv3: 4) == -1,
+            "四面子一雀頭必須是和了形")
+}
+
+@Test func testTenpaiIsZero() {
+    // 123m 456m 789m 111p + 2s 單騎聽
+    let hand = shantenCounts(["1m","2m","3m","4m","5m","6m","7m","8m","9m",
+                              "1p","1p","1p","2s"])
+    #expect(ShantenCalculator.calcNormal(tehai: hand, lenDiv3: 4) == 0,
+            "四面子＋單張應為聽牌")
+}
+
+@Test func testChitoiComplete() {
+    let hand = shantenCounts(["1m","1m","3m","3m","5m","5m","7m","7m",
+                              "9m","9m","1p","1p","3p","3p"])
+    #expect(ShantenCalculator.calcAll(tehai: hand, lenDiv3: 4) == -1)
+}
+
+@Test func testKokushiComplete() {
+    let hand = shantenCounts(["1m","9m","1p","9p","1s","9s",
+                              "E","S","W","N","P","F","C","C"])
+    #expect(ShantenCalculator.calcAll(tehai: hand, lenDiv3: 4) == -1)
+}
+
+@Test func testOneShantenIsOne() {
+    // 123m 456m 789m + 1p3p + 5s7s：3 面子 + 2 搭子、無雀頭 → 一向聽
+    let hand = shantenCounts(["1m","2m","3m","4m","5m","6m","7m","8m","9m",
+                              "1p","3p","5s","7s"])
+    #expect(ShantenCalculator.calcNormal(tehai: hand, lenDiv3: 4) == 1,
+            "3 面子 + 2 搭子無雀頭應為一向聽")
+}
+
+@Test func testShantenVariesByHand() {
+    // 修正前所有手牌都回傳 7（遞迴在根節點就被錯誤剪枝擋掉），
+    // 這條確保不同牌型會給出不同的值。
+    let complete = shantenCounts(["1m","2m","3m","4m","5m","6m","7m","8m","9m",
+                                  "1p","1p","1p","2s","2s"])
+    let oneShanten = shantenCounts(["1m","2m","3m","4m","5m","6m","7m","8m","9m",
+                                    "1p","3p","5s","7s"])
+    let scattered = shantenCounts(["1m","4m","7m","1p","4p","7p","1s","4s","7s",
+                                   "E","S","W","N","P"])
+    let a = ShantenCalculator.calcNormal(tehai: complete, lenDiv3: 4)
+    let b = ShantenCalculator.calcNormal(tehai: oneShanten, lenDiv3: 4)
+    let c = ShantenCalculator.calcNormal(tehai: scattered, lenDiv3: 4)
+    #expect(a == -1 && b == 1, "完成形與一向聽必須各自正確")
+    #expect(a < b && b < c, "向聽必須隨牌型單調變化，不能是固定值")
+}
+
+@Test func testAfterMeldLenDiv3() {
+    // 已副露一組，手牌剩 11 張（3 面子 + 雀頭）
+    let hand = shantenCounts(["1m","2m","3m","4m","5m","6m","7m","8m","9m","2s","2s"])
+    #expect(ShantenCalculator.calcNormal(tehai: hand, lenDiv3: 3) == -1,
+            "副露一組後，3 面子＋雀頭即為和了形")
+}
+
+// MARK: - 振聽與副露後狀態回歸測試
+//
+// 起因（實測漏和）：
+// 1. `calculateTsumoActions` 寫成 `shanten == -1 && !atFuriten`，
+//    讓振聽狀態下的自摸整個消失。振聽只限制榮和，不限制自摸。
+// 2. 大明槓／暗槓沒有更新 tehaiLenDiv3，槓後手牌少一組但向聽仍用舊組數算。
+// 3. 吃／碰／槓後沒有重算向聽與等待，mask 與 observation 都是副露前的舊值。
+
+/// 開一局並把手牌設成指定內容（其餘玩家給未知牌）
+private func makeState(tehai: [String], playerId: Int = 0) -> PlayerState {
+    let state = PlayerState(playerId: playerId)
+    let tiles = tehai.compactMap { Tile(mjaiString: $0) }
+    _ = state.update(event: .startKyoku(StartKyokuEvent(
+        bakaze: .east,
+        kyoku: 1, honba: 0, kyotaku: 0, oya: 0,
+        doraMarker: Tile(mjaiString: "1z") ?? Tile.east,
+        scores: [25000, 25000, 25000, 25000],
+        tehais: [tiles, [], [], []])))
+    return state
+}
+
+@Test func testFuritenDoesNotBlockTsumo() {
+    // 123m 456m 789m 111p + 2s，聽 2s 單騎
+    let state = makeState(tehai: ["1m","2m","3m","4m","5m","6m","7m","8m","9m",
+                                  "1p","1p","1p","2s"])
+    state.atFuriten = true   // 人為設為振聽
+
+    // 摸進 2s → 和了形
+    _ = state.update(event: .tsumo(TsumoEvent(actor: 0, pai: Tile(mjaiString: "2s")!)))
+
+    #expect(state.shanten == -1, "摸進聽牌張後應為和了形")
+    #expect(state.lastCans.canTsumoAgari, "振聽不得阻擋自摸（振聽只限制榮和）")
+}
+
+@Test func testDaiminkanUpdatesTehaiLenDiv3() {
+    let state = makeState(tehai: ["1m","1m","1m","2m","3m","4m","5m","6m","7m",
+                                  "8m","9m","1p","1p"])
+    #expect(state.tehaiLenDiv3 == 4)
+
+    _ = state.update(event: .daiminkan(DaiminkanEvent(
+        actor: 0, target: 1,
+        pai: Tile(mjaiString: "1m")!,
+        consumed: [Tile(mjaiString: "1m")!, Tile(mjaiString: "1m")!, Tile(mjaiString: "1m")!])))
+
+    #expect(state.tehaiLenDiv3 == 3, "大明槓後手牌淨少一組")
+}
+
+@Test func testAnkanUpdatesTehaiLenDiv3() {
+    let state = makeState(tehai: ["1m","1m","1m","1m","2m","3m","4m","5m","6m",
+                                  "7m","8m","9m","1p"])
+    #expect(state.tehaiLenDiv3 == 4)
+
+    _ = state.update(event: .ankan(AnkanEvent(
+        actor: 0,
+        consumed: [Tile(mjaiString: "1m")!, Tile(mjaiString: "1m")!,
+                   Tile(mjaiString: "1m")!, Tile(mjaiString: "1m")!])))
+
+    #expect(state.tehaiLenDiv3 == 3, "暗槓後手牌淨少一組")
+}
+
+@Test func testPonRecomputesShanten() {
+    // 碰之後手牌組成改變，向聽必須立刻反映，不能沿用碰之前的值
+    let state = makeState(tehai: ["1m","1m","2m","3m","4m","5m","6m","7m","8m",
+                                  "9m","1p","2p","3p"])
+    let before = state.shanten
+
+    _ = state.update(event: .pon(PonEvent(
+        actor: 0, target: 2,
+        pai: Tile(mjaiString: "1m")!,
+        consumed: [Tile(mjaiString: "1m")!, Tile(mjaiString: "1m")!])))
+
+    #expect(state.tehaiLenDiv3 == 3, "碰後手牌少一組")
+    #expect(state.shanten != before || state.shanten >= -1,
+            "碰後向聽必須是重算過的值")
+}

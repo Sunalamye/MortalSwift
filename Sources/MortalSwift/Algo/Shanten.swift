@@ -120,11 +120,32 @@ public enum ShantenCalculator {
         targetMentsu: Int,
         minShanten: inout Int
     ) {
-        // 剪枝：當前狀態不可能更好
-        let currentShanten = calcShantenFromState(mentsu: mentsu, tatsu: tatsu, hasJantou: hasJantou, targetMentsu: targetMentsu)
-        if currentShanten >= minShanten {
+        // 剪枝必須用**下界**（樂觀估計），不能用當前值。
+        //
+        // 原本寫的是 `if calcShantenFromState(...) >= minShanten { return }`，
+        // 但 calcShantenFromState 隨著遞迴取到更多面子／搭子只會遞減，
+        // 也就是它是該子樹的**上界**而非下界，拿來剪枝會砍掉仍可能更好的分支。
+        //
+        // 更糟的是根節點就會中招：target=4 時初始值為 4*2-0-0+1 = 9，
+        // 而 minShanten 初值 8，`9 >= 8` 成立 → 整個遞迴一次都沒跑，
+        // 任何手牌都回傳 8-1 = 7。（單純調大初值不能解決，深層節點仍會誤剪。）
+        //
+        // 正確下界：假設剩餘的牌全部都能湊成面子，最多還能補
+        // floor(剩餘張數 / 3) 組，雀頭也樂觀假設拿得到。
+        var remaining = 0
+        for i in suitStart..<34 { remaining += tehai[i] }
+        let optimisticMentsu = min(targetMentsu - mentsu, remaining / 3)
+        let lowerBound = calcShantenFromState(
+            mentsu: mentsu + optimisticMentsu,
+            tatsu: tatsu,
+            hasJantou: true,
+            targetMentsu: targetMentsu)
+        if lowerBound >= minShanten {
             return
         }
+
+        let currentShanten = calcShantenFromState(
+            mentsu: mentsu, tatsu: tatsu, hasJantou: hasJantou, targetMentsu: targetMentsu)
 
         // 找到下一個有牌的位置
         var pos = suitStart

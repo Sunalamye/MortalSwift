@@ -307,6 +307,12 @@ extension PlayerState {
 
             tehaiLenDiv3 = max(0, tehaiLenDiv3 - 1)
 
+            // 副露改變了手牌組成，向聽與等待必須立刻重算。
+            // 原本只有開局／摸牌／打牌會算，吃碰之後仍沿用副露前的舊值，
+            // 導致 mask 與 observation 都是過期的。
+            updateShanten()
+            updateWaits()
+
             // 需要打牌
             lastCans.canDiscard = true
         }
@@ -336,6 +342,8 @@ extension PlayerState {
             pons.append(event.pai.deaka.index)
 
             tehaiLenDiv3 = max(0, tehaiLenDiv3 - 1)
+            updateShanten()
+            updateWaits()
 
             // 需要打牌
             lastCans.canDiscard = true
@@ -367,6 +375,12 @@ extension PlayerState {
 
             minkans.append(event.pai.deaka.index)
 
+            // 大明槓吃掉手上 3 張再補嶺上 1 張，手牌淨少一組。
+            // 吃／碰有做這件事，槓卻漏了，導致之後的向聽都用錯的組數在算。
+            tehaiLenDiv3 = max(0, tehaiLenDiv3 - 1)
+            updateShanten()
+            updateWaits()
+
             // 嶺上狀態
             atRinshan = true
         }
@@ -389,6 +403,11 @@ extension PlayerState {
             let idx = event.consumed[0].deaka.index
             ankans.append(idx)
 
+            // 暗槓吃掉手上 4 張再補嶺上 1 張，手牌同樣淨少一組
+            tehaiLenDiv3 = max(0, tehaiLenDiv3 - 1)
+            updateShanten()
+            updateWaits()
+
             // 嶺上狀態
             atRinshan = true
         }
@@ -406,6 +425,11 @@ extension PlayerState {
                 pons.remove(at: idx)
                 minkans.append(event.pai.deaka.index)
             }
+
+            // 加槓：手上少 1 張、補嶺上 1 張，組數不變（碰時已扣過），
+            // 但手牌組成變了，向聽與等待仍要重算
+            updateShanten()
+            updateWaits()
 
             // 嶺上狀態
             atRinshan = true
@@ -434,8 +458,12 @@ extension PlayerState {
         lastCans = ActionCandidate()
         lastCans.canDiscard = true
 
-        // 檢查自摸
-        if shanten == -1 && !atFuriten {
+        // 檢查自摸。
+        //
+        // 振聽**只限制榮和**，不限制自摸——這是麻將規則，不是實作選擇。
+        // 原本寫成 `shanten == -1 && !atFuriten`，會讓振聽狀態下的自摸消失，
+        // 是實測漏和的成因之一。
+        if shanten == -1 {
             lastCans.canTsumoAgari = true
         }
 
