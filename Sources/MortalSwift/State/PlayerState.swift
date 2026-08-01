@@ -56,7 +56,11 @@ public final class PlayerState: @unchecked Sendable {
     // MARK: - Kawa (Discard Piles)
 
     /// 各家的河 (相對座位)
-    public var kawa: [[KawaItem]] = [[], [], [], []]
+    ///
+    /// 四家的陣列以「打牌輪次」對齊：某家因為別人吃碰槓而被跳過的那一輪會補一個 `nil`
+    /// （見 `padKawaAtStart` / `padKawaForPonOrDaiminkan`）。對齊之後同一個 index
+    /// 在四家之間就是同一輪，observation 的時間衰減才有一致的基準。
+    public var kawa: [[KawaItem?]] = [[], [], [], []]
     /// 河概覽 (只有牌)
     public var kawaOverview: [[Tile]] = [[], [], [], []]
     /// 最後的手切牌
@@ -106,6 +110,12 @@ public final class PlayerState: @unchecked Sendable {
     public var forbiddenTiles: [Bool] = [Bool](repeating: false, count: 34)
     /// 已打過的牌
     public var discardedTiles: [Bool] = [Bool](repeating: false, count: 34)
+    /// 打出後向聽數不變的牌
+    public var keepShantenDiscards: [Bool] = [Bool](repeating: false, count: 34)
+    /// 打出後向聽數前進的牌
+    public var nextShantenDiscards: [Bool] = [Bool](repeating: false, count: 34)
+    /// 是否存在能前進向聽的打牌
+    public var hasNextShantenDiscard: Bool = false
 
     // MARK: - Dora
 

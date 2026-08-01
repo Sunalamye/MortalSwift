@@ -25,9 +25,31 @@ public enum ShantenCalculator {
     public static func calcNormal(tehai: [Int], lenDiv3: Int) -> Int {
         guard tehai.count == 34, lenDiv3 >= 0, lenDiv3 <= 4 else { return 6 }
 
+        let raw = calcNormalCore(tehai: tehai, lenDiv3: lenDiv3)
+
+        // 「宣稱聽牌」要再確認一次進張存不存在。
+        //
+        // 面子分解本身不管牌是否還有剩：`1111m 333p 222s 444z` 會被拆成
+        // 111m/333p/222s/444z 四組面子 + 1m 單騎，形式上是聽牌——但四枚 1m 都在手上，
+        // 第五枚摸不到，實際上是一向聽。逐張試進是唯一能排除這種假聽牌的方法。
+        //
+        // 只對 3n+1 手牌做：3n+2 再加一張就變成 15 張，沒有意義。
+        guard raw == 0, tehai.reduce(0, +) == lenDiv3 * 3 + 1 else { return raw }
+
+        for tile in 0..<34 where tehai[tile] < 4 {
+            var probe = tehai
+            probe[tile] += 1
+            if calcNormalCore(tehai: probe, lenDiv3: lenDiv3) == -1 {
+                return 0
+            }
+        }
+        return 1
+    }
+
+    /// 純面子分解，不檢查進張是否還有剩
+    private static func calcNormalCore(tehai: [Int], lenDiv3: Int) -> Int {
         var minShanten = 8
 
-        // 遞歸計算
         calcNormalRecursive(
             tehai: tehai,
             suitStart: 0,
@@ -130,16 +152,28 @@ public enum ShantenCalculator {
         // 而 minShanten 初值 8，`9 >= 8` 成立 → 整個遞迴一次都沒跑，
         // 任何手牌都回傳 8-1 = 7。（單純調大初值不能解決，深層節點仍會誤剪。）
         //
-        // 正確下界：假設剩餘的牌全部都能湊成面子，最多還能補
-        // floor(剩餘張數 / 3) 組，雀頭也樂觀假設拿得到。
+        // 正確下界：剩餘的牌可能湊成面子，**也**可能湊成搭子——兩者都會降低向聽。
+        // 只算面子不算搭子的版本不是下界：例如剩 2s3s4s5s6s（5 張）時它只算得出
+        // 「1 組面子」，但實際是「1 面子 + 1 搭子」，估出來的值比真值高，
+        // 於是這個分支會被誤剪，聽牌被算成一向聽。
+        //
+        // 枚舉「拿 a 組面子、剩下盡量湊搭子」的所有切法取最小，才是真正的樂觀估計。
         var remaining = 0
         for i in suitStart..<34 { remaining += tehai[i] }
-        let optimisticMentsu = min(targetMentsu - mentsu, remaining / 3)
-        let lowerBound = calcShantenFromState(
-            mentsu: mentsu + optimisticMentsu,
-            tatsu: tatsu,
-            hasJantou: true,
-            targetMentsu: targetMentsu)
+
+        let maxExtraMentsu = min(targetMentsu - mentsu, remaining / 3)
+        var lowerBound = Int.max
+        if maxExtraMentsu >= 0 {
+            for extraMentsu in 0...max(0, maxExtraMentsu) {
+                let leftover = remaining - extraMentsu * 3
+                let extraTatsu = min(targetMentsu - mentsu - extraMentsu, leftover / 2)
+                lowerBound = min(lowerBound, calcShantenFromState(
+                    mentsu: mentsu + extraMentsu,
+                    tatsu: tatsu + max(0, extraTatsu),
+                    hasJantou: true,
+                    targetMentsu: targetMentsu))
+            }
+        }
         if lowerBound >= minShanten {
             return
         }

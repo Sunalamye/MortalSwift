@@ -515,7 +515,10 @@ private func makeState(tehai: [String], playerId: Int = 0) -> PlayerState {
     // 摸進 2s → 和了形
     _ = state.update(event: .tsumo(TsumoEvent(actor: 0, pai: Tile(mjaiString: "2s")!)))
 
-    #expect(state.shanten == -1, "摸進聽牌張後應為和了形")
+    // `shanten` 是 3n+1 手牌的值（摸牌不重算，與 libriichi 一致），
+    // 所以這裡看的是「摸進來的牌在等待裡」而不是「shanten 變 -1」。
+    #expect(state.shanten == 0, "摸牌前是聽牌")
+    #expect(state.waits[Tile(mjaiString: "2s")!.index], "應聽 2s 單騎")
     #expect(state.lastCans.canTsumoAgari, "振聽不得阻擋自摸（振聽只限制榮和）")
 }
 
@@ -563,26 +566,3 @@ private func makeState(tehai: [String], playerId: Int = 0) -> PlayerState {
 
 // MARK: - Observation 覆蓋率診斷（非斷言，用來量化與 libriichi 的落差）
 
-@Test func diagnoseObsChannelCoverage() {
-    let state = makeState(tehai: ["1m","2m","3m","4m","5m","6m","7m","8m","9m",
-                                  "1p","1p","1p","2s"])
-    _ = state.update(event: .tsumo(TsumoEvent(actor: 0, pai: Tile(mjaiString: "2s")!)))
-
-    let (obs, mask) = ObsEncoder.encode(state: state)
-
-    let width = 34
-    var nonZeroChannels = 0
-    var lastNonZero = -1
-    for ch in 0..<ObsEncoder.obsChannels {
-        var any = false
-        for i in 0..<width where obs[ch * width + i] != 0 { any = true; break }
-        if any { nonZeroChannels += 1; lastNonZero = ch }
-    }
-    print("=== ObsEncoder 覆蓋率 ===")
-    print("宣告 channels : \(ObsEncoder.obsChannels)")
-    print("有值的 channel: \(nonZeroChannels)")
-    print("最後有值的索引: \(lastNonZero)")
-    print("obs 陣列長度  : \(obs.count) (期望 \(ObsEncoder.obsChannels * width))")
-    print("mask 長度     : \(mask.count) (模型期望 46)")
-    #expect(obs.count == ObsEncoder.obsChannels * width)
-}

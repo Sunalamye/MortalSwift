@@ -7,6 +7,15 @@
 //  Observation shape: (1012, 34) for version 4
 //  Action mask shape: (46,)
 //
+//  ⚠️ 這個檔案的 channel 佈局**不是設計出來的，是抄來的**。
+//
+//  `mortal.mlmodelc` 是固定成品，它訓練時看到的每一個 channel 代表什麼，
+//  完全由 libriichi（Mortal 的 Rust 核心）的 `encode_obs` 決定。少算或多算一個
+//  channel，就會把其後**每一格**的語意都推移，模型等於在讀一份看不懂的輸入。
+//
+//  權威定義：docs/reference/libriichi_obs_repr.rs（來源 Equim-chan/Mortal）。
+//  改動任何一段之前先讀它，並用 `obsParityAgainstLibRiichi` 對拍驗證。
+//
 
 import Foundation
 
@@ -19,495 +28,473 @@ public struct ObsEncoder {
     public static let obsWidth = 34
     public static let actionSpace = 46
 
+    /// 自家河每一項佔的 channel 數
+    private static let selfKawaItemChannels = 4
+    /// 對家河每一項佔的 channel 數
+    private static let kawaItemChannels = 8
+    /// 單人期望值表的最大巡目數
+    private static let maxNumTurns = 17
+
+    // MARK: - Encoding Context
+
+    /// 一次編碼過程中的寫入游標
+    ///
+    /// `fill` 寫整列（34 格都是同一個值），`assign` 只寫一格——
+    /// 這兩者在 libriichi 裡是不同語意，混用會造成難以察覺的落差。
+    private struct Context {
+        var obs = [Float](repeating: 0, count: obsChannels * obsWidth)
+        var mask = [UInt8](repeating: 0, count: actionSpace)
+        var idx = 0
+
+        mutating func fill(_ channel: Int, _ value: Float) {
+            guard channel >= 0 && channel < obsChannels else { return }
+            let base = channel * obsWidth
+            for i in 0..<obsWidth { obs[base + i] = value }
+        }
+
+        mutating func assign(_ channel: Int, _ column: Int, _ value: Float) {
+            guard channel >= 0 && channel < obsChannels,
+                  column >= 0 && column < obsWidth else { return }
+            obs[channel * obsWidth + column] = value
+        }
+
+        func get(_ channel: Int, _ column: Int) -> Float {
+            guard channel >= 0 && channel < obsChannels,
+                  column >= 0 && column < obsWidth else { return 0 }
+            return obs[channel * obsWidth + column]
+        }
+
+        /// 整數編碼（v4 只做 rescale 或 one-hot，不做 rbf）
+        mutating func encodeInteger(_ n: Int, cap: Int, oneHot: Bool = false, rescale: Bool = false) {
+            let clamped = min(max(0, n), cap)
+            if oneHot {
+                fill(idx + clamped, 1.0)
+                idx += cap + 1
+            }
+            if rescale {
+                fill(idx, Float(clamped) / Float(cap))
+                idx += 1
+            }
+        }
+
+        /// 一組牌的編碼（4 格計數 + 3 格紅五），共 7 channel
+        mutating func encodeTileSet<S: Sequence>(_ tiles: S) where S.Element == Tile {
+            var counts = [Int](repeating: 0, count: 34)
+            for tile in tiles {
+                let tid = tile.deaka.index
+                guard tid >= 0 else { continue }
+                assign(idx + counts[tid], tid, 1.0)
+                counts[tid] += 1
+                if tile.isRed {
+                    fill(idx + 4 + (tile.indexWithAka - 34), 1.0)
+                }
+            }
+            idx += 7
+        }
+    }
+
     // MARK: - Encoding
 
     /// 編碼遊戲狀態為觀測張量
-    /// - Parameter state: 玩家狀態
+    /// - Parameters:
+    ///   - state: 玩家狀態
+    ///   - atKanSelect: 是否處於「選擇槓哪張」的次級決策
     /// - Returns: (觀測張量, 動作遮罩)
-    public static func encode(state: PlayerState) -> (obs: [Float], mask: [UInt8]) {
-        var obs = [Float](repeating: 0, count: obsChannels * obsWidth)
-        var channel = 0
-
-        // 1. 手牌組成 (7 channels)
-        channel = encodeTehai(state: state, obs: &obs, startChannel: channel)
-
-        // 2. 分數 (10 channels)
-        channel = encodeScores(state: state, obs: &obs, startChannel: channel)
-
-        // 3. 排名 (4 channels)
-        channel = encodeRank(state: state, obs: &obs, startChannel: channel)
-
-        // 4. 局數 (4 channels)
-        channel = encodeKyoku(state: state, obs: &obs, startChannel: channel)
-
-        // 5. 本場和立直棒 (variable channels)
-        channel = encodeCounters(state: state, obs: &obs, startChannel: channel)
-
-        // 6. 風 (4 channels)
-        channel = encodeWinds(state: state, obs: &obs, startChannel: channel)
-
-        // 7. 寶牌 (34 channels)
-        channel = encodeDora(state: state, obs: &obs, startChannel: channel)
-
-        // 8. 自家河 (variable channels)
-        channel = encodeSelfKawa(state: state, obs: &obs, startChannel: channel)
-
-        // 9. 其他家河 (3 * variable channels)
-        for i in 1..<4 {
-            channel = encodeOpponentKawa(state: state, playerIdx: i, obs: &obs, startChannel: channel)
-        }
-
-        // 10. 副露資訊
-        channel = encodeFuuro(state: state, obs: &obs, startChannel: channel)
-
-        // 11. 其他資訊
-        channel = encodeOtherInfo(state: state, obs: &obs, startChannel: channel)
-
-        // 確保填滿到 1012 channels
-        while channel < obsChannels {
-            channel += 1
-        }
-
-        // 編碼動作遮罩
-        let mask = encodeMask(state: state)
-
-        return (obs, mask)
-    }
-
-    // MARK: - Channel Encoders
-
-    /// 編碼手牌 (7 channels)
-    /// - 4 channels: 手牌數量 (0-4)
-    /// - 3 channels: 紅寶牌
-    private static func encodeTehai(state: PlayerState, obs: inout [Float], startChannel: Int) -> Int {
-        var ch = startChannel
-
-        // 手牌數量
-        for count in 1...4 {
-            for idx in 0..<34 {
-                if state.tehai[idx] >= count {
-                    obs[ch * obsWidth + idx] = 1.0
-                }
-            }
-            ch += 1
-        }
-
-        // 紅寶牌
-        // 5m (index 4)
-        if state.akasInHand[0] {
-            obs[ch * obsWidth + 4] = 1.0
-        }
-        ch += 1
-
-        // 5p (index 13)
-        if state.akasInHand[1] {
-            obs[ch * obsWidth + 13] = 1.0
-        }
-        ch += 1
-
-        // 5s (index 22)
-        if state.akasInHand[2] {
-            obs[ch * obsWidth + 22] = 1.0
-        }
-        ch += 1
-
-        return ch
-    }
-
-    /// 編碼分數 (8 channels：每位玩家 100k 正規化 + 30k 正規化)
-    private static func encodeScores(state: PlayerState, obs: inout [Float], startChannel: Int) -> Int {
-        var ch = startChannel
-
-        for i in 0..<4 {
-            let score = Float(state.scores[i])
-
-            // 正規化分數 (0-100k)
-            let normalizedScore = min(1.0, max(0.0, score / 100000.0))
-            for idx in 0..<34 {
-                obs[ch * obsWidth + idx] = normalizedScore
-            }
-            ch += 1
-
-            // 細緻分數 (0-30k 範圍)
-            let fineScore = min(1.0, max(0.0, score / 30000.0))
-            for idx in 0..<34 {
-                obs[ch * obsWidth + idx] = fineScore
-            }
-            ch += 1
-        }
-
-        // 註：這裡原本還多編了 3 個「相對分數差」channel，但 libriichi 沒有這一段
-        // （見 docs/reference/libriichi_obs_repr.rs 的 encode_obs：v4 每位玩家只有
-        // 100k 正規化與 30k 正規化共 2 個 channel）。多出來的 3 格會讓其後所有
-        // channel 整體位移，模型收到的每一格語意都跟訓練時不同。
-
-        return ch
-    }
-
-    /// 編碼排名 (4 channels)
-    private static func encodeRank(state: PlayerState, obs: inout [Float], startChannel: Int) -> Int {
-        var ch = startChannel
-
-        for rank in 1...4 {
-            if state.rank == rank {
-                for idx in 0..<34 {
-                    obs[ch * obsWidth + idx] = 1.0
-                }
-            }
-            ch += 1
-        }
-
-        return ch
-    }
-
-    /// 編碼局數 (4 channels)
-    private static func encodeKyoku(state: PlayerState, obs: inout [Float], startChannel: Int) -> Int {
-        var ch = startChannel
-
-        // libriichi 的 state.kyoku 是 0-based（東1 = 0），
-        // 而這裡的 state.kyoku 直接取自 MJAI 的 1-based 值，編碼時要先轉換。
-        let kyoku0 = max(0, state.kyoku - 1)
-        for kyoku in 0..<4 {
-            if kyoku0 == kyoku {
-                for idx in 0..<34 {
-                    obs[ch * obsWidth + idx] = 1.0
-                }
-            }
-            ch += 1
-        }
-
-        return ch
-    }
-
-    /// 編碼本場和立直棒 (variable channels)
-    private static func encodeCounters(state: PlayerState, obs: inout [Float], startChannel: Int) -> Int {
-        var ch = startChannel
-
-        // libriichi v4 的 IntegerEncoder 只做 rescale：值 = min(n, cap) / cap，佔 1 個 channel。
-        // （`rbf_intervals` 只在 v2/v3 生效，v4 分支完全忽略它——
-        //   見 docs/reference/libriichi_obs_repr.rs 的 IntegerEncoder::encode）
-        // 本場與立直棒的 cap 都是 10。
-        let cap: Float = 10.0
-
-        let honba = min(Float(state.honba), cap) / cap
-        for idx in 0..<obsWidth { obs[ch * obsWidth + idx] = honba }
-        ch += 1
-
-        let kyotaku = min(Float(state.kyotaku), cap) / cap
-        for idx in 0..<obsWidth { obs[ch * obsWidth + idx] = kyotaku }
-        ch += 1
-
-        return ch
-    }
-
-    /// 編碼風（2 channels：場風、自風各 1）
-    ///
-    /// libriichi 用的是 `assign(idx, tile_index, 1.0)`——只在該風對應的**牌索引**上打 1，
-    /// 不是整列廣播、也不是 4 格 one-hot。原本寫成 4+4 格 one-hot 會多佔 6 個 channel，
-    /// 讓其後所有 channel 位移。
-    private static func encodeWinds(state: PlayerState, obs: inout [Float], startChannel: Int) -> Int {
-        var ch = startChannel
-
-        obs[ch * obsWidth + state.bakaze.index] = 1.0
-        ch += 1
-
-        obs[ch * obsWidth + state.jikaze.index] = 1.0
-        ch += 1
-
-        // 場風與局數的合成編碼：n = min(場風 - 東, 1) * 4 + 局數，cap = 7，只做 rescale
-        let bakazeOffset = min(max(0, state.bakaze.index - Tile.east.index), 1)
-        let n = Float(min(bakazeOffset * 4 + max(0, state.kyoku - 1), 7))
-        let v = n / 7.0
-        for idx in 0..<obsWidth { obs[ch * obsWidth + idx] = v }
-        ch += 1
-
-        return ch
-    }
-
-    /// 編碼寶牌 (34 channels)
-    private static func encodeDora(state: PlayerState, obs: inout [Float], startChannel: Int) -> Int {
-        var ch = startChannel
-
-        // 寶牌指示牌
-        for indicator in state.doraIndicators {
-            let idx = indicator.deaka.index
-            if idx >= 0 && idx < 34 {
-                obs[ch * obsWidth + idx] = 1.0
-            }
-        }
-        ch += 1
-
-        // 寶牌係數
-        for idx in 0..<34 {
-            obs[ch * obsWidth + idx] = Float(state.doraFactor[idx])
-        }
-        ch += 1
-
-        return ch
-    }
-
-    /// 編碼自家河 (variable channels)
-    private static func encodeSelfKawa(state: PlayerState, obs: inout [Float], startChannel: Int) -> Int {
-        var ch = startChannel
-        let kawa = state.kawaOverview[0]
-
-        // 最近 6 張打牌 (每張 4 channels)
-        let recentCount = min(6, kawa.count)
-        for i in 0..<6 {
-            if i < recentCount {
-                let tile = kawa[kawa.count - 1 - i]
-                let idx = tile.deaka.index
-                if idx >= 0 && idx < 34 {
-                    obs[ch * obsWidth + idx] = 1.0
-                }
-
-                // 是否手切
-                if i < state.kawa[0].count {
-                    let kawaItem = state.kawa[0][state.kawa[0].count - 1 - i]
-                    if kawaItem.sutehai.isTedashi {
-                        obs[(ch + 1) * obsWidth + idx] = 1.0
-                    }
-                    // 是否立直宣言牌
-                    if kawaItem.sutehai.isRiichi {
-                        obs[(ch + 2) * obsWidth + idx] = 1.0
-                    }
-                    // 時間衰減
-                    let decay = 1.0 - Float(i) / 6.0
-                    obs[(ch + 3) * obsWidth + idx] = decay
-                }
-            }
-            ch += 4
-        }
-
-        // 所有打牌 (18 channels)
-        for i in 0..<min(18, kawa.count) {
-            let tile = kawa[i]
-            let idx = tile.deaka.index
-            if idx >= 0 && idx < 34 {
-                obs[ch * obsWidth + idx] = 1.0
-            }
-            ch += 1
-        }
-        ch += max(0, 18 - kawa.count)
-
-        return ch
-    }
-
-    /// 編碼對手河 (variable channels per opponent)
-    private static func encodeOpponentKawa(state: PlayerState, playerIdx: Int, obs: inout [Float], startChannel: Int) -> Int {
-        var ch = startChannel
-        let kawa = state.kawaOverview[playerIdx]
-
-        // 最近 6 張打牌 (每張 4 channels)
-        let recentCount = min(6, kawa.count)
-        for i in 0..<6 {
-            if i < recentCount {
-                let tile = kawa[kawa.count - 1 - i]
-                let idx = tile.deaka.index
-                if idx >= 0 && idx < 34 {
-                    obs[ch * obsWidth + idx] = 1.0
-
-                    // 是否手切
-                    if i < state.kawa[playerIdx].count {
-                        let kawaItem = state.kawa[playerIdx][state.kawa[playerIdx].count - 1 - i]
-                        if kawaItem.sutehai.isTedashi {
-                            obs[(ch + 1) * obsWidth + idx] = 1.0
-                        }
-                        // 是否立直宣言牌
-                        if kawaItem.sutehai.isRiichi {
-                            obs[(ch + 2) * obsWidth + idx] = 1.0
-                        }
-                    }
-
-                    // 時間衰減
-                    let decay = 1.0 - Float(i) / 6.0
-                    obs[(ch + 3) * obsWidth + idx] = decay
-                }
-            }
-            ch += 4
-        }
-
-        // 所有打牌 (18 channels)
-        for i in 0..<min(18, kawa.count) {
-            let tile = kawa[i]
-            let idx = tile.deaka.index
-            if idx >= 0 && idx < 34 {
-                obs[ch * obsWidth + idx] = 1.0
-            }
-            ch += 1
-        }
-        ch += max(0, 18 - kawa.count)
-
-        // 立直狀態
-        if state.riichiAccepted[playerIdx] {
-            for idx in 0..<34 {
-                obs[ch * obsWidth + idx] = 1.0
-            }
-        }
-        ch += 1
-
-        return ch
-    }
-
-    /// 編碼副露資訊
-    private static func encodeFuuro(state: PlayerState, obs: inout [Float], startChannel: Int) -> Int {
-        var ch = startChannel
-
-        // 各家副露
-        for playerIdx in 0..<4 {
-            // 副露牌
-            for meld in state.fuuroOverview[playerIdx] {
-                for tile in meld {
-                    let idx = tile.deaka.index
-                    if idx >= 0 && idx < 34 {
-                        obs[ch * obsWidth + idx] = 1.0
-                    }
-                }
-            }
-            ch += 1
-
-            // 暗槓
-            for ankan in state.ankanOverview[playerIdx] {
-                if let tile = ankan.first {
-                    let idx = tile.deaka.index
-                    if idx >= 0 && idx < 34 {
-                        obs[ch * obsWidth + idx] = 1.0
-                    }
-                }
-            }
-            ch += 1
-        }
-
-        return ch
-    }
-
-    /// 編碼其他資訊
-    private static func encodeOtherInfo(state: PlayerState, obs: inout [Float], startChannel: Int) -> Int {
-        var ch = startChannel
-
-        // 剩餘牌數
-        let tilesLeftNorm = Float(state.tilesLeft) / 70.0
-        for idx in 0..<34 {
-            obs[ch * obsWidth + idx] = tilesLeftNorm
-        }
-        ch += 1
-
-        // 向聽數
-        let shantenNorm = Float(max(0, state.shanten + 1)) / 7.0
-        for idx in 0..<34 {
-            obs[ch * obsWidth + idx] = min(1.0, shantenNorm)
-        }
-        ch += 1
-
-        // 是否門前
-        if state.isMenzen {
-            for idx in 0..<34 {
-                obs[ch * obsWidth + idx] = 1.0
-            }
-        }
-        ch += 1
-
-        // 自家立直
-        if state.riichiAccepted[0] {
-            for idx in 0..<34 {
-                obs[ch * obsWidth + idx] = 1.0
-            }
-        }
-        ch += 1
-
-        // 一發狀態
-        if state.atIppatsu {
-            for idx in 0..<34 {
-                obs[ch * obsWidth + idx] = 1.0
-            }
-        }
-        ch += 1
-
-        // 已見牌
-        for idx in 0..<34 {
-            obs[ch * obsWidth + idx] = Float(state.tilesSeen[idx]) / 4.0
-        }
-        ch += 1
-
-        // 聽牌
-        for idx in 0..<34 {
-            if state.waits[idx] {
-                obs[ch * obsWidth + idx] = 1.0
-            }
-        }
-        ch += 1
-
-        // 振聽
-        if state.atFuriten {
-            for idx in 0..<34 {
-                obs[ch * obsWidth + idx] = 1.0
-            }
-        }
-        ch += 1
-
-        return ch
-    }
-
-    // MARK: - Mask Encoding
-
-    /// 編碼動作遮罩
-    private static func encodeMask(state: PlayerState) -> [UInt8] {
-        var mask = [UInt8](repeating: 0, count: actionSpace)
+    public static func encode(state: PlayerState, atKanSelect: Bool = false) -> (obs: [Float], mask: [UInt8]) {
+        var ctx = Context()
         let cans = state.lastCans
 
-        // 打牌 (0-33)
+        // ── 手牌 4 + 紅五 3 ────────────────────────────────────────────
+        for tid in 0..<34 where state.tehai[tid] > 0 {
+            for n in 0..<state.tehai[tid] {
+                ctx.assign(ctx.idx + n, tid, 1.0)
+            }
+        }
+        ctx.idx += 4
+
+        for i in 0..<3 where state.akasInHand[i] {
+            ctx.fill(ctx.idx + i, 1.0)
+        }
+        ctx.idx += 3
+
+        // ── 分數：每人 100k / 30k 兩種正規化 ───────────────────────────
+        for score in state.scores {
+            ctx.fill(ctx.idx, Float(min(max(0, score), 100_000)) / 100_000.0)
+            ctx.idx += 1
+            ctx.fill(ctx.idx, Float(min(max(0, score), 30_000)) / 30_000.0)
+            ctx.idx += 1
+        }
+
+        // ── 排名（libriichi 為 0-based，Swift 的 rank 是 1-based）──────
+        ctx.fill(ctx.idx + max(0, min(state.rank - 1, 3)), 1.0)
+        ctx.idx += 4
+
+        // ── 局數（libriichi 的 kyoku 是 0-based）──────────────────────
+        let kyoku0 = max(0, min(state.kyoku - 1, 3))
+        ctx.fill(ctx.idx + kyoku0, 1.0)
+        ctx.idx += 4
+
+        // ── 本場 / 立直棒：v4 只做 rescale，各 1 格 ────────────────────
+        ctx.encodeInteger(state.honba, cap: 10, rescale: true)
+        ctx.encodeInteger(state.kyotaku, cap: 10, rescale: true)
+
+        // ── 場風 / 自風：只在該風的牌索引上打點 ───────────────────────
+        ctx.assign(ctx.idx, state.bakaze.index, 1.0)
+        ctx.assign(ctx.idx + 1, state.jikaze.index, 1.0)
+        ctx.idx += 2
+
+        let bakazeOffset = min(max(0, state.bakaze.index - Tile.east.index), 1)
+        ctx.encodeInteger(bakazeOffset * 4 + kyoku0, cap: 7, rescale: true)
+
+        // ── 寶牌指示牌（7 channel 的 tile set）─────────────────────────
+        ctx.encodeTileSet(state.doraIndicators)
+
+        // ── 河 ────────────────────────────────────────────────────────
+        let maxKawaLen = state.kawa.map(\.count).max() ?? 0
+
+        encodeKawaWindow(state.kawa[0], &ctx, itemChannels: selfKawaItemChannels) { item, c in
+            encodeSelfKawaItem(item, &c)
+        }
+        // 自家：時間衰減
+        for (turn, item) in state.kawa[0].enumerated() {
+            guard let item else { continue }
+            let tid = item.sutehai.tile.deaka.index
+            ctx.assign(ctx.idx, tid, decay(turn: turn, maxKawaLen: maxKawaLen))
+        }
+        ctx.idx += 1
+
+        for seat in 1..<4 {
+            encodeKawaWindow(state.kawa[seat], &ctx, itemChannels: kawaItemChannels) { item, c in
+                encodeOpponentKawaItem(item, &c)
+            }
+            // 對家：時間衰減 / 手切 / 立直宣言各一格
+            for (turn, item) in state.kawa[seat].enumerated() {
+                guard let item else { continue }
+                let tid = item.sutehai.tile.deaka.index
+                let v = decay(turn: turn, maxKawaLen: maxKawaLen)
+                ctx.assign(ctx.idx, tid, v)
+                if item.sutehai.isTedashi { ctx.assign(ctx.idx + 1, tid, v) }
+                if item.sutehai.isRiichi { ctx.assign(ctx.idx + 2, tid, v) }
+            }
+            ctx.idx += 3
+        }
+
+        // ── 剩餘牌數 ──────────────────────────────────────────────────
+        ctx.fill(ctx.idx, Float(state.tilesLeft) / 69.0)
+        ctx.idx += 1
+
+        // ── 各家持有的寶牌數 / 未見寶牌數 ─────────────────────────────
+        let dorasOwned = computeDorasOwned(state: state)
+        for count in dorasOwned {
+            ctx.encodeInteger(count, cap: 12, rescale: true)
+        }
+        let dorasSeen = computeDorasSeen(state: state)
+        let dorasUnseen = state.doraIndicators.count * 4 + 3 - dorasSeen
+        ctx.encodeInteger(dorasUnseen, cap: 5 * 4 + 3, rescale: true)
+
+        // ── 各家河概覽 ────────────────────────────────────────────────
+        for seat in 0..<4 {
+            ctx.encodeTileSet(state.kawaOverview[seat])
+        }
+
+        // ── 副露：每家 4 組 × 5 channel ───────────────────────────────
+        for seat in 0..<4 {
+            let melds = state.fuuroOverview[seat]
+            for meld in melds.prefix(4) {
+                for tile in meld {
+                    let tid = tile.deaka.index
+                    guard tid >= 0 else { continue }
+                    // 同一張牌重覆出現時往下一格疊
+                    let slot = (0..<4).first { ctx.get(ctx.idx + $0, tid) == 0 } ?? 3
+                    ctx.assign(ctx.idx + slot, tid, 1.0)
+                    if tile.isRed { ctx.fill(ctx.idx + 4, 1.0) }
+                }
+                ctx.idx += 5
+            }
+            ctx.idx += (4 - min(melds.count, 4)) * 5
+        }
+
+        // ── 暗槓 ──────────────────────────────────────────────────────
+        for seat in 0..<4 {
+            for ankan in state.ankanOverview[seat] {
+                if let tile = ankan.first {
+                    ctx.assign(ctx.idx, tile.deaka.index, 1.0)
+                }
+            }
+            ctx.idx += 1
+        }
+
+        // ── 已見牌 ────────────────────────────────────────────────────
+        for tid in 0..<34 {
+            ctx.assign(ctx.idx, tid, Float(state.tilesSeen[tid]) / 4.0)
+        }
+        ctx.idx += 1
+
+        // ── 對家最後手切牌 / 立直宣言牌 ───────────────────────────────
+        for seat in 1..<4 {
+            encodeSutehaiDetail(state.lastTedashis[seat], &ctx)
+        }
+        for seat in 1..<4 {
+            encodeSutehaiDetail(state.riichiSutehais[seat], &ctx)
+        }
+
+        // ── 對家立直狀態 ──────────────────────────────────────────────
+        for i in 0..<3 where state.riichiDeclared[i + 1] {
+            ctx.fill(ctx.idx + i, 1.0)
+        }
+        ctx.idx += 3
+        for i in 0..<3 where state.riichiAccepted[i + 1] {
+            ctx.fill(ctx.idx + i, 1.0)
+        }
+        ctx.idx += 3
+
+        // ── 聽牌 / 振聽 / 向聽 ────────────────────────────────────────
+        for tid in 0..<34 where state.waits[tid] {
+            ctx.assign(ctx.idx, tid, 1.0)
+        }
+        ctx.idx += 1
+
+        if state.atFuriten { ctx.fill(ctx.idx, 1.0) }
+        ctx.idx += 1
+
+        // libriichi 的 state.shanten 經過 .max(0)，和了（-1）在這裡編成 0
+        ctx.encodeInteger(max(0, state.shanten), cap: 6, oneHot: true)
+
+        if state.riichiAccepted[0] { ctx.fill(ctx.idx, 1.0) }
+        ctx.idx += 1
+
+        if atKanSelect { ctx.fill(ctx.idx, 1.0) }
+        ctx.idx += 1
+
+        // ── 可回應的那張牌（吃/碰/槓/榮）──────────────────────────────
+        if cans.canPass, let tile = state.lastKawaTile {
+            let tid = tile.deaka.index
+            ctx.assign(ctx.idx, tid, 1.0)
+            if tile.isRed { ctx.fill(ctx.idx + 1, 1.0) }
+            if tid >= 0 && state.doraFactor[tid] > 0 { ctx.fill(ctx.idx + 2, 1.0) }
+
+            if !atKanSelect {
+                ctx.mask[actionSpace - 1] = 1
+            } else if cans.canDaiminkan {
+                ctx.mask[tid] = 1
+            }
+        }
+        ctx.idx += 3
+
+        // ── 打牌候選 ──────────────────────────────────────────────────
         if cans.canDiscard {
-            for idx in 0..<34 {
-                if state.tehai[idx] > 0 {
-                    // 檢查是否禁止打出
-                    if !state.forbiddenTiles[idx] {
-                        mask[idx] = 1
-                    }
+            for (t, ok) in state.discardCandidatesAka().enumerated() where ok {
+                let deakaT: Int
+                switch t {
+                case 34: deakaT = 4
+                case 35: deakaT = 13
+                case 36: deakaT = 22
+                default: deakaT = t
+                }
+                ctx.assign(ctx.idx, deakaT, 1.0)
+                if !atKanSelect { ctx.mask[t] = 1 }
+            }
+            for tid in 0..<34 where state.keepShantenDiscards[tid] {
+                ctx.assign(ctx.idx + 1, tid, 1.0)
+            }
+            for tid in 0..<34 where state.nextShantenDiscards[tid] {
+                ctx.assign(ctx.idx + 2, tid, 1.0)
+            }
+            // ctx.idx + 3 = 「打了之後無條件聽牌且有役」的候選。
+            // 需要完整的役種判定（libriichi 的 AgariCalculator），本版尚未移植 → 留空。
+            if state.riichiDeclared[0] { ctx.fill(ctx.idx + 4, 1.0) }
+        }
+        ctx.idx += 5
+
+        // ── 各動作可用性 ──────────────────────────────────────────────
+        if cans.canRiichi {
+            ctx.fill(ctx.idx, 1.0)
+            if !atKanSelect { ctx.mask[37] = 1 }
+        }
+        ctx.idx += 1
+
+        if cans.canChiLow {
+            ctx.fill(ctx.idx, 1.0)
+            if !atKanSelect { ctx.mask[38] = 1 }
+        }
+        if cans.canChiMid {
+            ctx.fill(ctx.idx + 1, 1.0)
+            if !atKanSelect { ctx.mask[39] = 1 }
+        }
+        if cans.canChiHigh {
+            ctx.fill(ctx.idx + 2, 1.0)
+            if !atKanSelect { ctx.mask[40] = 1 }
+        }
+        ctx.idx += 3
+
+        if cans.canPon {
+            ctx.fill(ctx.idx, 1.0)
+            if !atKanSelect { ctx.mask[41] = 1 }
+        }
+        ctx.idx += 1
+
+        if cans.canDaiminkan {
+            ctx.fill(ctx.idx, 1.0)
+            if !atKanSelect { ctx.mask[42] = 1 }
+        }
+        ctx.idx += 1
+
+        if cans.canAnkan {
+            for tile in state.ankanCandidates {
+                ctx.assign(ctx.idx, tile.deaka.index, 1.0)
+                if atKanSelect { ctx.mask[tile.deaka.index] = 1 }
+            }
+            if !atKanSelect { ctx.mask[42] = 1 }
+        }
+        ctx.idx += 1
+
+        if cans.canKakan {
+            for tile in state.kakanCandidates {
+                ctx.assign(ctx.idx, tile.deaka.index, 1.0)
+                if atKanSelect { ctx.mask[tile.deaka.index] = 1 }
+            }
+            if !atKanSelect { ctx.mask[42] = 1 }
+        }
+        ctx.idx += 1
+
+        if cans.canAgari {
+            ctx.fill(ctx.idx, 1.0)
+            if !atKanSelect { ctx.mask[43] = 1 }
+        }
+        ctx.idx += 1
+
+        if cans.canRyukyoku {
+            ctx.fill(ctx.idx, 1.0)
+            if !atKanSelect { ctx.mask[44] = 1 }
+        }
+        ctx.idx += 1
+
+        // ── 單人期望值表（尚未移植）────────────────────────────────────
+        //
+        // libriichi 這裡會呼叫 `single_player_tables()`，用 sp solver 算出
+        // 每張打牌在每一巡的聽牌率／和牌率／期望值。那是 algo/sp（約 50KB Rust）
+        // 加上 agari 役種判定的完整移植，本版尚未做，因此這 123 格全部留 0。
+        //
+        // **保留正確的格數**是關鍵：即使內容是 0，後面沒有東西了，但格數錯會讓
+        // assert 失敗，也代表這份佈局的理解是錯的。
+        ctx.idx += 2                       // encode_ev
+        ctx.idx += 2 * 34                  // 各打牌所需的進張
+        ctx.idx += 2                       // 進張數最多的打牌
+        ctx.idx += 3 * maxNumTurns         // 聽牌率 / 和牌率 / 期望值表
+
+        assert(ctx.idx == obsChannels, "channel 佈局錯誤：寫到 \(ctx.idx)，應為 \(obsChannels)")
+
+        return (ctx.obs, ctx.mask)
+    }
+
+    // MARK: - Kawa Helpers
+
+    /// 時間衰減：越接近最新一輪越接近 1
+    private static func decay(turn: Int, maxKawaLen: Int) -> Float {
+        exp(-0.2 * Float(maxKawaLen - 1 - turn))
+    }
+
+    /// 河的「開頭 6 項」與「結尾 18 項（由新到舊）」兩個視窗
+    private static func encodeKawaWindow(
+        _ kawa: [KawaItem?],
+        _ ctx: inout Context,
+        itemChannels: Int,
+        encodeItem: (KawaItem?, inout Context) -> Void
+    ) {
+        for item in kawa.prefix(6) { encodeItem(item, &ctx) }
+        ctx.idx += (6 - min(kawa.count, 6)) * itemChannels
+
+        for item in kawa.reversed().prefix(18) { encodeItem(item, &ctx) }
+        ctx.idx += (18 - min(kawa.count, 18)) * itemChannels
+    }
+
+    private static func encodeSelfKawaItem(_ item: KawaItem?, _ ctx: inout Context) {
+        if let item {
+            for kan in item.kan {
+                ctx.assign(ctx.idx, kan.deaka.index, 1.0)
+            }
+            let sutehai = item.sutehai
+            ctx.assign(ctx.idx + 1, sutehai.tile.deaka.index, 1.0)
+            if sutehai.tile.isRed { ctx.fill(ctx.idx + 2, 1.0) }
+            if sutehai.isDora { ctx.fill(ctx.idx + 3, 1.0) }
+        }
+        ctx.idx += selfKawaItemChannels
+    }
+
+    private static func encodeOpponentKawaItem(_ item: KawaItem?, _ ctx: inout Context) {
+        if let item {
+            if let chiPon = item.chiPon, chiPon.consumed.count >= 2 {
+                let a = chiPon.consumed[0].deaka.index
+                let b = chiPon.consumed[1].deaka.index
+                ctx.assign(ctx.idx, min(a, b), 1.0)
+                ctx.assign(ctx.idx + 1, max(a, b), 1.0)
+            }
+            for kan in item.kan {
+                ctx.assign(ctx.idx + 2, kan.deaka.index, 1.0)
+            }
+            let sutehai = item.sutehai
+            ctx.assign(ctx.idx + 3, sutehai.tile.deaka.index, 1.0)
+            if sutehai.tile.isRed { ctx.fill(ctx.idx + 4, 1.0) }
+            if sutehai.isDora { ctx.fill(ctx.idx + 5, 1.0) }
+            if sutehai.isTedashi { ctx.fill(ctx.idx + 6, 1.0) }
+            if sutehai.isRiichi { ctx.fill(ctx.idx + 7, 1.0) }
+        }
+        ctx.idx += kawaItemChannels
+    }
+
+    /// 捨牌細節：牌 / 是否紅五 / 是否寶牌，共 3 channel
+    private static func encodeSutehaiDetail(_ sutehai: Sutehai?, _ ctx: inout Context) {
+        if let sutehai {
+            ctx.assign(ctx.idx, sutehai.tile.deaka.index, 1.0)
+            if sutehai.tile.isRed { ctx.fill(ctx.idx + 1, 1.0) }
+            if sutehai.isDora { ctx.fill(ctx.idx + 2, 1.0) }
+        }
+        ctx.idx += 3
+    }
+
+    // MARK: - Dora Accounting
+
+    /// 各家持有的寶牌數（含紅五）
+    ///
+    /// libriichi 是逐張增量維護的；這裡改成從既有狀態推導，結果相同但不需要
+    /// 在每個事件處理器裡都記得加減。
+    private static func computeDorasOwned(state: PlayerState) -> [Int] {
+        var owned = [Int](repeating: 0, count: 4)
+
+        // 自家手牌
+        for tid in 0..<34 {
+            owned[0] += state.tehai[tid] * state.doraFactor[tid]
+        }
+        owned[0] += state.akasInHand.filter { $0 }.count
+
+        // 各家副露
+        for seat in 0..<4 {
+            for meld in state.fuuroOverview[seat] {
+                for tile in meld {
+                    let tid = tile.deaka.index
+                    if tid >= 0 { owned[seat] += state.doraFactor[tid] }
+                    if tile.isRed { owned[seat] += 1 }
+                }
+            }
+            // 暗槓是同一張牌 4 枚
+            for ankan in state.ankanOverview[seat] {
+                if let tile = ankan.first {
+                    let tid = tile.deaka.index
+                    if tid >= 0 { owned[seat] += 4 * state.doraFactor[tid] }
                 }
             }
         }
 
-        // 立直 (37)
-        if cans.canRiichi {
-            mask[PlayerState.ActionIndex.riichi] = 1
-        }
+        return owned
+    }
 
-        // 吃 (38-40)
-        if cans.canChiLow {
-            mask[PlayerState.ActionIndex.chiLow] = 1
+    /// 已見的寶牌數（含紅五）
+    private static func computeDorasSeen(state: PlayerState) -> Int {
+        var seen = 0
+        for tid in 0..<34 {
+            seen += state.tilesSeen[tid] * state.doraFactor[tid]
         }
-        if cans.canChiMid {
-            mask[PlayerState.ActionIndex.chiMid] = 1
-        }
-        if cans.canChiHigh {
-            mask[PlayerState.ActionIndex.chiHigh] = 1
-        }
-
-        // 碰 (41)
-        if cans.canPon {
-            mask[PlayerState.ActionIndex.pon] = 1
-        }
-
-        // 槓 (42)
-        if cans.canKan {
-            mask[PlayerState.ActionIndex.kan] = 1
-        }
-
-        // 和 (43)
-        if cans.canAgari {
-            mask[PlayerState.ActionIndex.hora] = 1
-        }
-
-        // 流局 (44)
-        if cans.canRyukyoku {
-            mask[PlayerState.ActionIndex.ryukyoku] = 1
-        }
-
-        // 跳過 (45)
-        if cans.canPass {
-            mask[PlayerState.ActionIndex.pass] = 1
-        }
-
-        return mask
+        seen += state.akasSeen.filter { $0 }.count
+        return seen
     }
 }

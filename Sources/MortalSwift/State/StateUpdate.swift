@@ -16,9 +16,11 @@ extension PlayerState {
     /// - Returns: 是否需要動作
     public func update(event: MJAIEvent) -> Bool {
         // 清除上一輪的動作狀態
+        //
+        // intermediateKan / intermediateChiPon **不能**在這裡清：它們要從「我吃碰槓」
+        // 一路帶到「我接著打出的那張牌」，中間隔了一個事件。在這裡清等於永遠讀不到。
+        // 生命週期由 handleStartKyoku（開局重置）與 handleDahai（取用後清空）負責。
         lastCans = ActionCandidate()
-        intermediateKan = []
-        intermediateChiPon = nil
 
         switch event {
         case .startGame:
@@ -113,6 +115,14 @@ extension PlayerState {
         tilesSeen = [Int](repeating: 0, count: 34)
         forbiddenTiles = [Bool](repeating: false, count: 34)
         discardedTiles = [Bool](repeating: false, count: 34)
+        keepShantenDiscards = [Bool](repeating: false, count: 34)
+        nextShantenDiscards = [Bool](repeating: false, count: 34)
+        hasNextShantenDiscard = false
+
+        intermediateKan = []
+        intermediateChiPon = nil
+        dorasOwned = [0, 0, 0, 0]
+        dorasSeen = 0
 
         lastCans = ActionCandidate()
         ankanCandidates = []
@@ -142,6 +152,9 @@ extension PlayerState {
         // 計算相對莊家
         oya = toRelative(event.oya)
 
+        // 莊家之前的相對座位在第一輪不打牌，補 nil 讓四家的河對齊輪次
+        padKawaAtStart()
+
         // 計算自風
         let jikazeIndex = (playerId - event.oya + 4) % 4
         jikaze = [Tile.east, .south, .west, .north][jikazeIndex]
@@ -156,17 +169,22 @@ extension PlayerState {
         updateRank()
 
         // 設置手牌
+        // 自己的起手牌也算「已見」——libriichi 在配牌時就 witness 過，
+        // 少算會讓 tiles_seen 這一格與訓練時的語意不同。
         let myTehai = event.tehais[playerId]
         for tile in myTehai where tile != .unknown {
             addTile(tile)
+            markTileSeen(tile)
         }
 
         // 設置寶牌
         doraIndicators.append(event.doraMarker)
+        markTileSeen(event.doraMarker)
         updateDoraFactor()
 
-        // 計算向聽
+        // 計算向聽。配牌是 3n+1，此時才算得了等待
         updateShanten()
+        updateWaits()
 
         // 檢查 All Last
         checkAllLast()
@@ -190,11 +208,12 @@ extension PlayerState {
             addTile(event.pai)
             markTileSeen(event.pai)
 
-            // 更新向聽
-            updateShanten()
-            updateWaits()
-
-            // 計算可用動作
+            // 摸牌後**不重算向聽、也不重算 waits**。
+            //
+            // libriichi 的 `shanten` 一律是「3n+1 手牌」的值（tsumo handler 裡
+            // 明寫 "Does not update shanten"），摸牌後的 3n+2 沿用摸牌前那個數字。
+            // 這不是偷懶：`update_shanten_discards` 與 `can_riichi` 都拿它當基準比較，
+            // 在這裡重算會讓「這張打下去能不能前進向聽」整組判斷失去意義。
             calculateTsumoActions()
 
             return lastCans.canAct
@@ -210,20 +229,34 @@ extension PlayerState {
         let tile = event.pai
 
         // 記錄河
-        let isDora = isDoraIndicator(tile)
+        // isDora 指「這張牌本身是寶牌」（doraFactor > 0），不是「這張是寶牌指示牌」。
+        // isRiichi 指「這張是立直宣言牌」＝已宣告但尚未成立的那一巡。
+        let isRiichiSutehai = riichiDeclared[relActor] && !riichiAccepted[relActor]
         let sutehai = Sutehai(
             tile: tile,
-            isDora: isDora,
+            isDora: doraFactor[tile.deaka.index] > 0,
             isTedashi: !event.tsumogiri,
-            isRiichi: event.riichi ?? false
+            isRiichi: isRiichiSutehai
         )
-        let kawaItem = KawaItem(sutehai: sutehai)
+        // 吃／碰／槓掛在**打牌者自己**的這一項上（「我副露之後打出這張」），
+        // 不是掛在被吃那家的河上
+        let kawaItem = KawaItem(sutehai: sutehai, chiPon: intermediateChiPon, kan: intermediateKan)
+        intermediateChiPon = nil
+        intermediateKan = []
         kawa[relActor].append(kawaItem)
         kawaOverview[relActor].append(tile)
-        lastTedashis[relActor] = sutehai
+        if !event.tsumogiri {
+            lastTedashis[relActor] = sutehai
+        }
+        if isRiichiSutehai {
+            riichiSutehais[relActor] = sutehai
+        }
         lastKawaTile = tile
 
-        markTileSeen(tile)
+        // 自己打出的牌在配牌／摸牌時就已經算過「已見」，這裡再算一次會重覆計數
+        if relActor != 0 {
+            markTileSeen(tile)
+        }
 
         // 紅寶牌
         if tile.isRed {
@@ -239,11 +272,6 @@ extension PlayerState {
             // 自己打牌
             removeTile(tile)
             discardedTiles[tile.deaka.index] = true
-
-            // 重置立直後的狀態
-            if riichiDeclared[0] && !riichiAccepted[0] {
-                riichiSutehais[0] = sutehai
-            }
 
             // W 立直失效
             canWRiichi = false
@@ -272,6 +300,9 @@ extension PlayerState {
     private func handleReachAccepted(_ event: ReachAcceptedEvent) {
         let relActor = toRelative(event.actor)
         riichiAccepted[relActor] = true
+        // 立直成立時那 1000 點是**從分數扣掉**再變成場上的立直棒，
+        // 只加 kyotaku 不扣分會讓分數這幾格一路錯到局末
+        scores[relActor] -= 1000
         kyotaku += 1
 
         // 開啟一發
@@ -282,18 +313,16 @@ extension PlayerState {
 
     private func handleChi(_ event: ChiEvent) {
         let relActor = toRelative(event.actor)
-        let relTarget = toRelative(event.target)
 
         // 記錄副露
         let meld = [event.pai] + event.consumed
         fuuroOverview[relActor].append(meld)
 
-        // 更新河 (被吃的牌)
-        if let lastItem = kawa[relTarget].last {
-            let chiPon = ChiPon(consumed: event.consumed, targetTile: event.pai)
-            let newItem = KawaItem(sutehai: lastItem.sutehai, chiPon: chiPon, kan: lastItem.kan)
-            kawa[relTarget][kawa[relTarget].count - 1] = newItem
-        }
+        // 副露資訊暫存，等 actor 打出下一張時掛到他自己的河項上。
+        // 吃一定來自上家，不會跳過任何人，所以不需要補輪次。
+        intermediateChiPon = ChiPon(consumed: event.consumed, targetTile: event.pai)
+        // 副露亮出來的牌，對所有人都算「已見」
+        for tile in event.consumed { markTileSeen(tile) }
 
         if relActor == 0 {
             // 自己吃
@@ -310,28 +339,26 @@ extension PlayerState {
             // 副露改變了手牌組成，向聽與等待必須立刻重算。
             // 原本只有開局／摸牌／打牌會算，吃碰之後仍沿用副露前的舊值，
             // 導致 mask 與 observation 都是過期的。
+            // 同摸牌：副露後是 3n+2，不重算 waits
             updateShanten()
-            updateWaits()
 
             // 需要打牌
             lastCans.canDiscard = true
+            updateShantenDiscards()
         }
     }
 
     private func handlePon(_ event: PonEvent) {
         let relActor = toRelative(event.actor)
-        let relTarget = toRelative(event.target)
 
         // 記錄副露
         let meld = [event.pai] + event.consumed
         fuuroOverview[relActor].append(meld)
 
-        // 更新河
-        if let lastItem = kawa[relTarget].last {
-            let chiPon = ChiPon(consumed: event.consumed, targetTile: event.pai)
-            let newItem = KawaItem(sutehai: lastItem.sutehai, chiPon: chiPon, kan: lastItem.kan)
-            kawa[relTarget][kawa[relTarget].count - 1] = newItem
-        }
+        intermediateChiPon = ChiPon(consumed: event.consumed, targetTile: event.pai)
+        // 副露亮出來的牌，對所有人都算「已見」
+        for tile in event.consumed { markTileSeen(tile) }
+        padKawaForPonOrDaiminkan(absActor: event.actor, absTarget: event.target)
 
         if relActor == 0 {
             // 自己碰
@@ -342,27 +369,25 @@ extension PlayerState {
             pons.append(event.pai.deaka.index)
 
             tehaiLenDiv3 = max(0, tehaiLenDiv3 - 1)
+            // 同摸牌：副露後是 3n+2，不重算 waits
             updateShanten()
-            updateWaits()
 
             // 需要打牌
             lastCans.canDiscard = true
+            updateShantenDiscards()
         }
     }
 
     private func handleDaiminkan(_ event: DaiminkanEvent) {
         let relActor = toRelative(event.actor)
-        let relTarget = toRelative(event.target)
 
         // 記錄副露
         let meld = [event.pai] + event.consumed
         fuuroOverview[relActor].append(meld)
 
-        // 更新河
-        if let lastItem = kawa[relTarget].last {
-            let newItem = KawaItem(sutehai: lastItem.sutehai, chiPon: lastItem.chiPon, kan: meld)
-            kawa[relTarget][kawa[relTarget].count - 1] = newItem
-        }
+        intermediateKan.append(event.pai)
+        for tile in event.consumed { markTileSeen(tile) }
+        padKawaForPonOrDaiminkan(absActor: event.actor, absTarget: event.target)
 
         kansOnBoard += 1
 
@@ -392,6 +417,9 @@ extension PlayerState {
         // 記錄暗槓
         ankanOverview[relActor].append(event.consumed.map { $0.deaka })
 
+        intermediateKan.append(event.consumed[0])
+        for tile in event.consumed { markTileSeen(tile) }
+
         kansOnBoard += 1
 
         if relActor == 0 {
@@ -415,6 +443,9 @@ extension PlayerState {
 
     private func handleKakan(_ event: KakanEvent) {
         let relActor = toRelative(event.actor)
+
+        intermediateKan.append(event.pai)
+        markTileSeen(event.pai)
 
         // 更新副露
         if relActor == 0 {
@@ -457,14 +488,24 @@ extension PlayerState {
     private func calculateTsumoActions() {
         lastCans = ActionCandidate()
         lastCans.canDiscard = true
+        if !riichiAccepted[0] {
+            updateShantenDiscards()
+        }
 
-        // 檢查自摸。
+        // 檢查自摸：摸到的牌在等待裡就是和了形。
         //
         // 振聽**只限制榮和**，不限制自摸——這是麻將規則，不是實作選擇。
         // 原本寫成 `shanten == -1 && !atFuriten`，會讓振聽狀態下的自摸消失，
         // 是實測漏和的成因之一。
-        if shanten == -1 {
-            lastCans.canTsumoAgari = true
+        if let tsumo = lastSelfTsumo, waits[tsumo.deaka.index] {
+            // 門前清自摸和 / 立直 / 海底摸月 / 嶺上開花 / 天地和 → 必定有役
+            if isMenzen || riichiAccepted[0] || tilesLeft == 0 || atRinshan || canWRiichi {
+                lastCans.canTsumoAgari = true
+            } else {
+                // 副露手要判役種才知道能不能和，需要完整的 AgariCalculator（尚未移植）。
+                // 這裡樂觀當作有役——實際送出前還有伺服器 oplist 這一層把關。
+                lastCans.canTsumoAgari = true
+            }
         }
 
         // 檢查暗槓
@@ -529,6 +570,80 @@ extension PlayerState {
         }
     }
 
+    // MARK: - Kawa 輪次對齊
+
+    /// 開局時，相對座位在莊家之前的人第一輪不打牌，補一個 nil 佔位
+    private func padKawaAtStart() {
+        for rel in 0..<oya {
+            kawa[rel].append(nil)
+        }
+    }
+
+    /// 碰／大明槓會跳過 target 與 actor 之間的玩家，替他們補一個 nil 佔位
+    private func padKawaForPonOrDaiminkan(absActor: Int, absTarget: Int) {
+        var i = (absTarget + 1) % 4
+        while i != absActor {
+            kawa[toRelative(i)].append(nil)
+            i = (i + 1) % 4
+        }
+    }
+
+    // MARK: - 打牌候選
+
+    /// 逐張試打，分類成「向聽前進」與「向聽不變」
+    ///
+    /// 必須在手牌為 3n+2（可打牌）時呼叫。
+    func updateShantenDiscards() {
+        nextShantenDiscards = [Bool](repeating: false, count: 34)
+        keepShantenDiscards = [Bool](repeating: false, count: 34)
+        hasNextShantenDiscard = false
+
+        var work = tehai
+        for tid in 0..<34 where tehai[tid] > 0 {
+            work[tid] -= 1
+            let after = ShantenCalculator.calcAll(tehai: work, lenDiv3: tehaiLenDiv3)
+            work[tid] += 1
+
+            if after < shanten {
+                nextShantenDiscards[tid] = true
+                hasNextShantenDiscard = true
+            } else if after == shanten {
+                keepShantenDiscards[tid] = true
+            }
+        }
+    }
+
+    /// 可打出的牌（含紅五，索引 0-36）
+    ///
+    /// 立直成立後只能摸切；宣告立直但尚未成立時只能打不破壞聽牌的那些。
+    public func discardCandidatesAka() -> [Bool] {
+        var ret = [Bool](repeating: false, count: 37)
+
+        if riichiAccepted[0] {
+            if let tsumo = lastSelfTsumo {
+                ret[tsumo.indexWithAka] = true
+            }
+            return ret
+        }
+
+        for tid in 0..<34 where tehai[tid] > 0 {
+            if riichiDeclared[0] {
+                ret[tid] = shanten == 1 ? nextShantenDiscards[tid] : keepShantenDiscards[tid]
+            } else {
+                ret[tid] = !forbiddenTiles[tid]
+            }
+        }
+
+        // 手上有紅五時，紅五與普通五是兩個不同的打牌選項
+        let akaPairs = [(4, 34, 0), (13, 35, 1), (22, 36, 2)]
+        for (normal, aka, akaSlot) in akaPairs where ret[normal] && akasInHand[akaSlot] {
+            ret[aka] = true
+            ret[normal] = tehai[normal] > 1
+        }
+
+        return ret
+    }
+
     // MARK: - Helper Methods
 
     private func markTileSeen(_ tile: Tile) {
@@ -570,7 +685,8 @@ extension PlayerState {
         guard isMenzen && !riichiDeclared[0] && tilesLeft >= 4 && scores[0] >= 1000 else {
             return false
         }
-        return shanten == 0
+        // libriichi：向聽 0，或一向聽但存在能推進到聽牌的打牌
+        return shanten == 0 || (shanten == 1 && hasNextShantenDiscard)
     }
 
     private func canDeclareRyukyoku() -> Bool {
