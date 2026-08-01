@@ -560,3 +560,29 @@ private func makeState(tehai: [String], playerId: Int = 0) -> PlayerState {
     #expect(state.shanten != before || state.shanten >= -1,
             "碰後向聽必須是重算過的值")
 }
+
+// MARK: - Observation 覆蓋率診斷（非斷言，用來量化與 libriichi 的落差）
+
+@Test func diagnoseObsChannelCoverage() {
+    let state = makeState(tehai: ["1m","2m","3m","4m","5m","6m","7m","8m","9m",
+                                  "1p","1p","1p","2s"])
+    _ = state.update(event: .tsumo(TsumoEvent(actor: 0, pai: Tile(mjaiString: "2s")!)))
+
+    let (obs, mask) = ObsEncoder.encode(state: state)
+
+    let width = 34
+    var nonZeroChannels = 0
+    var lastNonZero = -1
+    for ch in 0..<ObsEncoder.obsChannels {
+        var any = false
+        for i in 0..<width where obs[ch * width + i] != 0 { any = true; break }
+        if any { nonZeroChannels += 1; lastNonZero = ch }
+    }
+    print("=== ObsEncoder 覆蓋率 ===")
+    print("宣告 channels : \(ObsEncoder.obsChannels)")
+    print("有值的 channel: \(nonZeroChannels)")
+    print("最後有值的索引: \(lastNonZero)")
+    print("obs 陣列長度  : \(obs.count) (期望 \(ObsEncoder.obsChannels * width))")
+    print("mask 長度     : \(mask.count) (模型期望 46)")
+    #expect(obs.count == ObsEncoder.obsChannels * width)
+}
