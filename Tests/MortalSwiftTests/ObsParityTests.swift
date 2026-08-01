@@ -181,7 +181,7 @@ private func mismatchedChannels(_ snapshot: ParitySnapshot) -> [Int] {
 ///
 /// 這不是「容許誤差」——是**明確標示還沒做完的部分**。移植完成後這個集合要清空。
 private let knownUnportedChannels: Set<Int> = {
-    var s: Set<Int> = [877]        // 打了之後無條件聽牌且有役（需要 AgariCalculator）
+    var s: Set<Int> = []
     s.formUnion(889..<1012)        // 單人期望值表（需要 algo/sp）
     return s
 }()

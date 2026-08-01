@@ -502,9 +502,13 @@ extension PlayerState {
             if isMenzen || riichiAccepted[0] || tilesLeft == 0 || atRinshan || canWRiichi {
                 lastCans.canTsumoAgari = true
             } else {
-                // 副露手要判役種才知道能不能和，需要完整的 AgariCalculator（尚未移植）。
-                // 這裡樂觀當作有役——實際送出前還有伺服器 oplist 這一層把關。
-                lastCans.canTsumoAgari = true
+                // 副露手要真的有役才能和
+                lastCans.canTsumoAgari = AgariCalculator(
+                    tehai: tehai, isMenzen: isMenzen,
+                    chis: chis, pons: pons, minkans: minkans, ankans: ankans,
+                    bakaze: bakaze.index, jikaze: jikaze.index,
+                    winningTile: tsumo.deaka.index, isRon: false
+                ).hasYaku()
             }
         }
 
@@ -634,14 +638,92 @@ extension PlayerState {
             }
         }
 
-        // 手上有紅五時，紅五與普通五是兩個不同的打牌選項
-        let akaPairs = [(4, 34, 0), (13, 35, 1), (22, 36, 2)]
-        for (normal, aka, akaSlot) in akaPairs where ret[normal] && akasInHand[akaSlot] {
+        applyAkaToCandidates(&ret)
+        return ret
+    }
+
+    /// 打出後「無條件聽牌且有役」的候選（含紅五，索引 0-36）
+    ///
+    /// 對應 libriichi 的 `discard_candidates_with_unconditional_tenpai_aka`。
+    /// 「無條件」的意思是：打了這張之後，**任何**可能進的和了牌都真的能和——
+    /// 不振聽、而且有役。只要有一張進張會造成振聽，這張打牌就不算數。
+    public func discardCandidatesWithUnconditionalTenpaiAka() -> [Bool] {
+        var ret = [Bool](repeating: false, count: 37)
+
+        // 海底、或根本到不了聽牌
+        if tilesLeft == 0 || shanten > 1 || (shanten == 1 && !hasNextShantenDiscard) {
+            return ret
+        }
+
+        if let tsumo = lastSelfTsumo {
+            if waits[tsumo.deaka.index] {
+                // 已經是和了形，打任何一張都會振聽
+                return ret
+            }
+            if riichiAccepted[0] {
+                // 立直後只能摸切；振聽是永久的
+                if !atFuriten { ret[tsumo.indexWithAka] = true }
+                return ret
+            }
+        } else if ShantenCalculator.calcAll(tehai: tehai, lenDiv3: tehaiLenDiv3) == -1 {
+            // 吃碰之後的打牌，同上
+            return ret
+        }
+
+        let tenpaiDiscards = shanten == 1 ? nextShantenDiscards : keepShantenDiscards
+
+        for discard in 0..<34 where tenpaiDiscards[discard] && !forbiddenTiles[discard] {
+            var after = tehai
+            after[discard] -= 1
+
+            for tsumo in 0..<34 {
+                if tsumo == discard || after[tsumo] == 4 { continue }
+
+                var complete = after
+                complete[tsumo] += 1
+                guard ShantenCalculator.calcAll(tehai: complete, lenDiv3: tehaiLenDiv3) == -1 else {
+                    continue
+                }
+
+                // 振聽：這張進張自己打過，整個打牌選項作廢
+                if discardedTiles[tsumo] {
+                    ret[discard] = false
+                    break
+                }
+
+                // 必須放在振聽檢查之後
+                if tilesSeen[tsumo] == 4 || ret[discard] { continue }
+
+                ret[discard] = AgariCalculator(
+                    tehai: complete, isMenzen: isMenzen,
+                    chis: chis, pons: pons, minkans: minkans, ankans: ankans,
+                    bakaze: bakaze.index, jikaze: jikaze.index,
+                    winningTile: tsumo, isRon: true
+                ).hasYaku()
+            }
+        }
+
+        applyAkaToCandidates(&ret)
+        return ret
+    }
+
+    /// 折回 34 格（紅五併入普通五）
+    public func discardCandidatesWithUnconditionalTenpai() -> [Bool] {
+        let full = discardCandidatesWithUnconditionalTenpaiAka()
+        var ret = Array(full[0..<34])
+        ret[4] = ret[4] || full[34]
+        ret[13] = ret[13] || full[35]
+        ret[22] = ret[22] || full[36]
+        return ret
+    }
+
+    /// 手上有紅五時，紅五與普通五是兩個不同的打牌選項
+    private func applyAkaToCandidates(_ ret: inout [Bool]) {
+        for (normal, aka, slot) in [(4, 34, 0), (13, 35, 1), (22, 36, 2)]
+        where ret[normal] && akasInHand[slot] {
             ret[aka] = true
             ret[normal] = tehai[normal] > 1
         }
-
-        return ret
     }
 
     // MARK: - Helper Methods

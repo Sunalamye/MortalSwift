@@ -300,8 +300,12 @@ public struct ObsEncoder {
             for tid in 0..<34 where state.nextShantenDiscards[tid] {
                 ctx.assign(ctx.idx + 2, tid, 1.0)
             }
-            // ctx.idx + 3 = 「打了之後無條件聽牌且有役」的候選。
-            // 需要完整的役種判定（libriichi 的 AgariCalculator），本版尚未移植 → 留空。
+            // 打了之後無條件聽牌且有役的候選
+            if state.shanten <= 1 {
+                for (tid, ok) in state.discardCandidatesWithUnconditionalTenpai().enumerated() where ok {
+                    ctx.assign(ctx.idx + 3, tid, 1.0)
+                }
+            }
             if state.riichiDeclared[0] { ctx.fill(ctx.idx + 4, 1.0) }
         }
         ctx.idx += 5
