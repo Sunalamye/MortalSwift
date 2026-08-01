@@ -376,3 +376,42 @@ private let knownUnportedChannels: Set<Int> = {
     print(String(format: "  %.1f ms", ms))
     print("  向聽 \(state.realTimeShanten())，剩餘 \(state.tilesLeft) 張")
 }
+
+/// 端到端合理性檢查：完整 observation 餵進模型後，推薦是不是合理的
+///
+/// 這**不是**強度評測——那需要跑幾千局的評測環境。
+/// 這裡只驗一件事：在一個答案毫無爭議的局面上，模型有沒有給出那個答案。
+/// 如果連這種局面都答錯，代表輸入管線還有問題。
+@Test func botRecommendsObviousDiscard() async throws {
+    let bot = try MortalBot(playerId: 0, version: 4, useBundledModel: true)
+    guard await bot.hasModel else {
+        Issue.record("模型不存在，無法做端到端檢查")
+        return
+    }
+
+    // 123m 456m 789m 11p 44s + 摸到中。
+    // 打中就是聽牌（1p/4s 雙碰），留中則毫無用處——這題沒有第二個答案。
+    let events = [
+        #"{"type":"start_game","id":0,"names":["P0","P1","P2","P3"]}"#,
+        #"{"type":"start_kyoku","bakaze":"E","dora_marker":"9s","kyoku":1,"honba":0,"kyotaku":0,"oya":0,"scores":[25000,25000,25000,25000],"tehais":[["1m","2m","3m","4m","5m","6m","7m","8m","9m","1p","1p","4s","4s"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"]]}"#,
+        #"{"type":"tsumo","actor":0,"pai":"C"}"#,
+    ]
+
+    var action: MJAIAction?
+    for json in events {
+        guard let data = json.data(using: .utf8),
+              let event = try? JSONDecoder().decode(MJAIEvent.self, from: data) else { continue }
+        action = try await bot.react(event: event)
+    }
+
+    // 合理答案有兩個：直接打中，或宣告立直（門前聽牌宣告立直是標準打法，
+    // 而且立直本身就隱含把中打出去）。打掉已成面子的任何一張都是錯的。
+    switch action {
+    case .reach:
+        break
+    case .dahai(let dahai):
+        #expect(dahai.pai == Tile(mjaiString: "C"), "該打的是中，實得 \(dahai.pai)")
+    default:
+        Issue.record("預期打牌或立直，實得 \(String(describing: action))")
+    }
+}
