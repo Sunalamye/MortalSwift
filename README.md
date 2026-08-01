@@ -1,358 +1,292 @@
 # MortalSwift
 
-[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/Sunalamye/MortalSwift)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20iOS-lightgrey.svg)](https://github.com/Sunalamye/MortalSwift)
+[![Version](https://img.shields.io/badge/version-0.5.0-blue.svg)](https://github.com/Sunalamye/MortalSwift/releases)
+[![Platform](https://img.shields.io/badge/platform-macOS%2013%2B%20%7C%20iOS%2016%2B-lightgrey.svg)](https://github.com/Sunalamye/MortalSwift)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
 
-[Mortal](https://github.com/Equim-chan/Mortal) 麻將 AI 的 Swift Package - 純 Swift 實現 + Core ML 推理。
-
-> **致謝**：本專案基於 [Mortal](https://github.com/Equim-chan/Mortal) 麻將 AI，感謝 [Equim-chan](https://github.com/Equim-chan) 開發的優秀專案。
+[Mortal](https://github.com/Equim-chan/Mortal) 麻將 AI 的 Swift Package。
+**純 Swift + Core ML，產品端零 Rust 依賴。**
 
 **[English](README_en.md)**
 
+> **致謝**：本專案基於 [Mortal](https://github.com/Equim-chan/Mortal)，
+> 感謝 [Equim-chan](https://github.com/Equim-chan) 開發的優秀專案。
+
+---
+
+## 這個套件解決的問題
+
+Mortal 的模型是**固定成品**。它吃的是一個 `1012 × 34` 的張量，每一格代表什麼
+（第 23 格是本場、第 860 格是聽牌、第 889–1011 格是每張打牌的期望值…）
+都由 Mortal 的 Rust 核心 **libriichi** 決定，寫死在權重裡。
+
+換掉編碼器等於換掉模型的語言。而編碼錯了**不會報錯**——模型會照樣算出一個
+看起來很正常的推薦，只是那個推薦建立在完全錯誤的理解上。
+
+所以 MortalSwift 不只是「把 libriichi 用 Swift 重寫一遍」，它還附帶一套對拍機制：
+把 libriichi 的 xcframework 掛在 **test target**，同一串對局事件同時餵給兩邊，
+逐格比對輸出。
+
+### 目前的對拍結果
+
+| 項目 | 落差 |
+|------|------|
+| observation（1012 channel） | **0** |
+| action mask（46 格） | **0** |
+
+產品 target 沒有任何 Rust 依賴，發布出去的 library 不含那個 binary。
+xcframework 純粹是測試時的基準。
+
+> 對拍證明的是**輸入語意正確**，不是**打得比較好**。
+> 後者需要跑幾千局的評測環境才說得準。
+
+---
+
 ## 安裝
-
-### Swift Package Manager
-
-在 `Package.swift` 中加入：
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/Sunalamye/MortalSwift.git", from: "0.3.0")
+    .package(url: "https://github.com/Sunalamye/MortalSwift.git", from: "0.5.0")
 ]
 ```
 
-或在 Xcode 中：File → Add Package Dependencies → 輸入儲存庫 URL
+Xcode：File → Add Package Dependencies → 貼上儲存庫 URL
 
-## 使用方式
+---
 
-### 強類型 API（推薦）
+## 快速開始
 
 ```swift
 import MortalSwift
 
-// 初始化 Bot
 let bot = try MortalBot(playerId: 0, version: 4)
 
-// 使用強類型事件
-let startGame = MJAIEvent.startGame(StartGameEvent(names: ["P0", "P1", "P2", "P3"]))
-_ = try await bot.react(event: startGame)
+// 強型別事件
+_ = try await bot.react(event: .startGame(
+    StartGameEvent(names: ["P0", "P1", "P2", "P3"])))
 
-let startKyoku = MJAIEvent.startKyoku(StartKyokuEvent(
-    bakaze: .east,
-    kyoku: 1,
-    honba: 0,
-    kyotaku: 0,
-    oya: 0,
+_ = try await bot.react(event: .startKyoku(StartKyokuEvent(
+    bakaze: .east, kyoku: 1, honba: 0, kyotaku: 0, oya: 0,
     doraMarker: .pin(3),
     scores: [25000, 25000, 25000, 25000],
-    tehais: [
-        [.man(1), .man(2), .man(3), .pin(4), .pin(5), .pin(6), .sou(7), .sou(8), .sou(9), .east, .south, .west, .north],
-        [.unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown],
-        // ...
-    ]
-))
-_ = try await bot.react(event: startKyoku)
+    tehais: [myHand, unknown, unknown, unknown])))
 
-// 摸牌後取得 AI 建議
-let tsumo = MJAIEvent.tsumo(TsumoEvent(actor: 0, pai: .man(5, red: true)))  // 紅 5 萬
-if let action = try await bot.react(event: tsumo) {
-    switch action {
-    case .dahai(let a):
-        print("打牌: \(a.pai), 摸切: \(a.tsumogiri)")
-    case .reach(let a):
-        print("立直！")
-    case .hora:
-        print("和了！")
-    default:
-        break
-    }
+// 輪到自己時回傳建議動作，否則 nil
+if let action = try await bot.react(event: .tsumo(
+    TsumoEvent(actor: 0, pai: .man(5)))) {
+    print(action)   // 例如 .dahai(...)
 }
 ```
 
-### JSON API
+也支援 JSON 字串介面（與 [mjai](https://mjai.app) 協定相容）：
 
 ```swift
-import MortalSwift
-
-// 1. 初始化 Bot（不帶 Core ML - 使用預設策略）
-let bot = try MortalBot(playerId: 0, version: 4, useBundledModel: false)
-
-// 2. 或使用內建 Core ML 模型（預設）
-let bot = try MortalBot(playerId: 0, version: 4)
-
-// 3. 或使用自訂 Core ML 模型 URL
-let modelURL = Bundle.main.url(forResource: "mortal", withExtension: "mlmodelc")
-let bot = try MortalBot(playerId: 0, version: 4, modelURL: modelURL)
-
-// 4. 處理 MJAI 事件
-let event = #"{"type":"tsumo","actor":0,"pai":"5m"}"#
-if let response = try await bot.react(mjaiEvent: event) {
-    print("Bot action: \(response)")
-}
-
-// 5. 取得觀察張量（用於自訂推理）
-let obs = await bot.getObservation()   // [Float] - 1012*34 個值
-let mask = await bot.getMask()         // [UInt8] - 46 個值 (0/1)
-
-// 6. 取得可用動作
-let candidates = await bot.getCandidateActions()  // [MJAIAction]
-
-// 7. 取得上次推理結果
-let qValues = await bot.getLastQValues()  // Core ML 輸出的 Q 值
-let probs = await bot.getLastProbs()      // Softmax 機率
+let json = try await bot.react(mjaiEvent: #"{"type":"tsumo","actor":0,"pai":"5m"}"#)
 ```
 
-## Package 結構
+`MortalBot` 是 `actor`，Core ML 推論在背景執行，不會卡住主執行緒。
+
+---
+
+## 裡面有什麼
 
 ```
-MortalSwift/
-├── Package.swift
-├── README.md
-└── Sources/
-    └── MortalSwift/
-        ├── Models/
-        │   ├── Tile.swift         # 麻將牌類型
-        │   ├── MJAIEvent.swift    # MJAI 事件（輸入）
-        │   ├── MJAIAction.swift   # MJAI 動作（輸出）
-        │   └── MortalError.swift  # 錯誤類型
-        ├── State/
-        │   ├── PlayerState.swift  # 遊戲狀態管理
-        │   ├── StateUpdate.swift  # MJAI 事件處理
-        │   ├── ObsEncoder.swift   # 觀測張量編碼
-        │   ├── ActionDecoder.swift # 動作解碼
-        │   ├── ActionCandidate.swift # 可用動作
-        │   └── KawaItem.swift     # 河牌結構
-        ├── Algo/
-        │   └── Shanten.swift      # 向聽數計算
-        ├── Resources/
-        │   └── mortal.mlmodelc    # Core ML 模型
-        ├── NativeMortalBot.swift  # 主要 Bot actor
-        └── MortalSwift.swift
+Sources/MortalSwift/
+├── MortalBot.swift           對外介面（actor）
+├── NativeMortalBot.swift     Core ML 推論
+├── Models/
+│   ├── Tile.swift            牌的表示與轉換
+│   ├── MJAIEvent.swift       輸入事件
+│   └── MJAIAction.swift      輸出動作
+├── State/
+│   ├── PlayerState.swift     對局狀態
+│   ├── StateUpdate.swift     事件 → 狀態
+│   ├── ObsEncoder.swift      狀態 → 1012×34 張量
+│   ├── ActionDecoder.swift   模型輸出 → 動作
+│   └── SinglePlayerTables.swift
+├── Algo/
+│   ├── ShantenTable.swift    向聽（查表，實際使用）
+│   ├── Shanten.swift         向聽（遞迴，測試對照用）
+│   ├── HandDivision.swift    和了形拆解
+│   ├── AgariCalculator.swift 役種與符計算
+│   ├── Point.swift           點數換算
+│   └── SPCalculator.swift    單人期望值推演
+└── Resources/
+    ├── mortal.mlmodelc       Core ML 模型
+    └── shanten_*.bin.gz      向聽查表
 ```
 
-## API
+模型輸入輸出：
+
+| | 形狀 |
+|---|---|
+| `obs` | `1 × 1012 × 34` |
+| `mask` | `1 × 46` |
+| `q_values` | `1 × 46` |
+
+---
+
+## 主要 API
 
 ### MortalBot
 
-`MortalBot` 是一個 **actor**，提供線程安全的非同步麻將 AI 存取。
-
 ```swift
-public actor MortalBot {
-    // 使用內建模型初始化
-    init(playerId: Int, version: Int = 4, useBundledModel: Bool = true) throws
+init(playerId: Int, version: Int = 4, useBundledModel: Bool = true) throws
+init(playerId: Int, version: Int = 4, modelURL: URL?) throws
 
-    // 使用自訂模型 URL 初始化
-    init(playerId: Int, version: Int = 4, modelURL: URL?) throws
+func react(event: MJAIEvent) async throws -> MJAIAction?
+func react(mjaiEvent: String) async throws -> String?
+func reactSync(event: MJAIEvent) throws -> MJAIAction?
 
-    // 處理 MJAI 事件（強類型）
-    func react(event: MJAIEvent) async throws -> MJAIAction?
-    func reactSync(event: MJAIEvent) throws -> MJAIAction?
-
-    // 處理 MJAI 事件（JSON）
-    func react(mjaiEvent: String) async throws -> String?
-    func reactSync(mjaiEvent: String) throws -> String?
-
-    // 取得當前觀察張量
-    func getObservation() -> [Float]
-
-    // 取得當前動作遮罩
-    func getMask() -> [UInt8]
-
-    // 取得可用動作
-    func getCandidateActions() -> [MJAIAction]
-
-    // 取得上次推理結果
-    func getLastQValues() -> [Float]
-    func getLastProbs() -> [Float]
-    func getLastSelectedAction() -> Int
-    func getLastMask() -> [UInt8]
-
-    // 檢查是否已載入 Core ML 模型
-    var hasModel: Bool { get }
-
-    // 取得內建模型 URL
-    nonisolated static var bundledModelURL: URL? { get }
-}
+// 推論細節
+var hasModel: Bool { get async }
+func getLastQValues() async -> [Float]
+func getLastProbs() async -> [Float]
+func getObservation() async -> [Float]
+func getMask() async -> [UInt8]
+func getCandidateActions() async -> [MahjongAction]
+func selectActionManually(_ index: Int) async
+func reset() async
 ```
 
-> **注意**：由於 `MortalBot` 是 actor，所有方法呼叫在 async 環境中都需要 `await`。
-
-### Tile（麻將牌）
+### 演算法（可獨立使用）
 
 ```swift
-public enum Tile: Hashable, Codable, Sendable {
-    // 數牌
-    case man(Int, red: Bool = false)  // 萬子 1-9, red=true 為紅寶牌
-    case pin(Int, red: Bool = false)  // 筒子 1-9
-    case sou(Int, red: Bool = false)  // 索子 1-9
+// 向聽數：-1 和了、0 聽牌、1-6 一到六向聽
+ShantenCalculator.calcAll(tehai: [Int], lenDiv3: Int) -> Int
 
-    // 字牌
-    case east, south, west, north     // 風牌
-    case white, green, red            // 三元牌（白發中）
-    case unknown                      // 未知牌（其他玩家的暗牌）
+// 役種與符
+AgariCalculator(tehai:isMenzen:chis:pons:minkans:ankans:
+                bakaze:jikaze:winningTile:isRon:)
+    .searchYakus() -> Agari?
+    .hasYaku() -> Bool
+    .agari(additionalHans:doras:) -> Agari?
 
-    // 輔助屬性
-    var index: Int                    // 牌索引 (0-33)
-    var deaka: Tile                   // 移除紅寶牌標記
-    var next: Tile                    // 下一張牌
-    var prev: Tile                    // 上一張牌
-    var isRed: Bool                   // 是否為紅寶牌
-    var isHonor: Bool                 // 是否為字牌
-    var isYaokyuu: Bool               // 是否為幺九牌
-}
+// 點數
+Point.calc(isOya: Bool, fu: Int, han: Int) -> Point
 
-// 使用範例
-let tile1 = Tile.man(5, red: true)    // 紅 5 萬
-let tile2 = Tile.pin(3)               // 3 筒
-let tile3 = Tile.east                 // 東風
-
-// 從 MJAI 字串解析
-let tile = Tile(mjaiString: "5mr")    // 紅 5 萬
-let tile = Tile(mjaiString: "E")      // 東
-
-// 從雀魂格式解析
-let tile = Tile(majsoulString: "0m")  // 紅 5 萬（雀魂用 0 表示紅寶牌）
-let tile = Tile(majsoulString: "1z")  // 東（雀魂用 1z-7z 表示字牌）
+// 單人期望值：每張打牌在每一巡的聽牌率／和牌率／期望點數
+playerState.singlePlayerTables() -> [SPCandidate]?
 ```
 
-### MJAIEvent（輸入事件）
+### 動作索引
 
-```swift
-public enum MJAIEvent: Codable, Sendable {
-    case startGame(StartGameEvent)       // 遊戲開始
-    case endGame                          // 遊戲結束
-    case startKyoku(StartKyokuEvent)     // 局開始
-    case endKyoku                         // 局結束
-    case tsumo(TsumoEvent)               // 摸牌
-    case dahai(DahaiEvent)               // 打牌
-    case reach(ReachEvent)               // 立直宣告
-    case reachAccepted(ReachAcceptedEvent) // 立直成立
-    case chi(ChiEvent)                   // 吃
-    case pon(PonEvent)                   // 碰
-    case daiminkan(DaiminkanEvent)       // 大明槓
-    case ankan(AnkanEvent)               // 暗槓
-    case kakan(KakanEvent)               // 加槓
-    case dora(DoraEvent)                 // 新寶牌
-    case nukidora(NukidoraEvent)         // 北抜き（三麻）
-    case hora(HoraEvent)                 // 和了
-    case ryukyoku(RyukyokuEvent)         // 流局
-}
+模型輸出的 46 格對應：
 
-// 使用範例
-let event = MJAIEvent.tsumo(TsumoEvent(actor: 0, pai: .man(5)))
-let json = try event.toJSONString()  // 轉換為 JSON
-```
+| 索引 | 動作 |
+|:---:|------|
+| 0–33 | 打出對應的牌 |
+| 34–36 | 打出紅五（萬／筒／索） |
+| 37 | 立直 |
+| 38–40 | 吃（下／中／上） |
+| 41 | 碰 |
+| 42 | 槓 |
+| 43 | 和 |
+| 44 | 九種九牌 |
+| 45 | 跳過 |
 
-### MJAIAction（輸出動作）
-
-```swift
-public enum MJAIAction: Codable, Sendable {
-    case dahai(DahaiAction)              // 打牌
-    case reach(ReachAction)              // 立直
-    case chi(ChiAction)                  // 吃
-    case pon(PonAction)                  // 碰
-    case daiminkan(DaiminkanAction)      // 大明槓
-    case ankan(AnkanAction)              // 暗槓
-    case kakan(KakanAction)              // 加槓
-    case nukidora(NukidoraAction)        // 北抜き（三麻）
-    case hora(HoraAction)                // 和了
-    case ryukyoku(RyukyokuAction)        // 流局
-    case pass(PassAction)                // 跳過
-}
-
-// 使用範例
-if let action = try await bot.react(event: tsumoEvent) {
-    print("動作類型: \(action.typeName)")  // "dahai", "reach", etc.
-    print("動作者: \(action.actor)")       // 0-3
-}
-```
-
-### 動作索引常數
-
-```swift
-// PlayerState.ActionIndex
-public static let riichi = 37     // 立直
-public static let chiLow = 38     // 吃（低）
-public static let chiMid = 39     // 吃（中）
-public static let chiHigh = 40    // 吃（高）
-public static let pon = 41        // 碰
-public static let kan = 42        // 槓
-public static let hora = 43       // 和
-public static let ryukyoku = 44   // 流局
-public static let pass = 45       // 過
-// 0-33: 打牌（對應 34 種牌）
-```
+---
 
 ## 資料流程
 
 ```
 MJAI 事件
-      ↓
-┌─────────────────────────┐
-│  PlayerState (Swift)    │
-│  • 解析事件             │
-│  • 更新遊戲狀態         │
-│  • 產生觀察張量         │
-└─────────────────────────┘
-      ↓
-obs: [1012×34], mask: [46]
-      ↓
-┌─────────────────────────┐
-│  Core ML（背景執行）    │  ← async, nonisolated
-│  • 神經網路推理         │
-│  • 輸出 Q 值            │
-└─────────────────────────┘
-      ↓
-action_idx: 0-45
-      ↓
-┌─────────────────────────┐
-│  ActionDecoder (Swift)  │
-│  • 動作索引 → MJAI 動作 │
-└─────────────────────────┘
-      ↓
-MJAIAction
+   ↓
+PlayerState ── StateUpdate ──→ 對局狀態
+   ↓
+ObsEncoder ──→ obs [1012×34] + mask [46]
+   ↓
+Core ML（背景執行，nonisolated）
+   ↓
+q_values [46]
+   ↓
+ActionDecoder ──→ MJAIAction
 ```
 
-## 並發架構
+---
 
-`MortalBot` 使用 Swift 現代並發模型：
+## 驗證與效能
 
-- **Actor 隔離**：線程安全的狀態管理
-- **非同步推理**：Core ML 透過 `Task.detached` 在背景執行
-- **非阻塞**：UI 執行緒在推理期間不會被阻塞
-
+```bash
+swift test              # 47 個測試
+swift test -c release   # 效能數字要看這個
 ```
-react() [async, actor-isolated]
-    └── selectAction() [async]
-            └── runInference() [nonisolated]
-                    └── Task.detached { Core ML 推理 }
-```
+
+測試涵蓋：
+
+- **observation 對拍** — 對 libriichi 逐格比對，兩套劇本（含碰、他家立直、手切）
+- **役種判定** — libriichi `agari.rs` 自己的 24 個案例
+- **點數換算** — 完整符 × 飜對照表
+- **向聽** — libriichi 的 19 個案例，外加查表版與遞迴版在 3000 手隨機牌上互相對照
+- **端到端** — 模型在答案毫無爭議的局面上是否給出該答案
+
+### 效能
+
+單次 observation 編碼（含單人期望值推演）：
+
+| 情境 | Debug | **Release** |
+|------|-------|------------|
+| 聽牌 | 3.6 ms | **0.1 ms** |
+| 開局三向聽（最壞） | 1,225 ms | **36.7 ms** |
+
+⚠️ **`swift test` 預設是 debug build。** 兩者差 33 倍，
+拿 debug 數字判斷效能會得到錯誤結論（這件事實際發生過，見設計紀錄）。
+
+---
 
 ## 需求
 
-- macOS 13+ / iOS 16+
-- Swift 5.9+
-- Core ML 模型（可選）：`mortal.mlmodelc`
+| | 版本 |
+|---|---|
+| macOS | 13.0+ |
+| iOS | 16.0+ |
+| Swift | 5.9+ |
+| 架構 | Apple Silicon（Core ML 模型需要 Neural Engine） |
+
+**只支援四人麻將。** 三麻的 observation 是 `775 × 34`、動作空間 44，
+結構完全不同；而且公開管道找不到訓練好的三麻權重
+（詳見[模型來源紀錄](docs/decisions/model-provenance.md)）。
+
+---
 
 ## 更新日誌
 
-### v0.3.0 (2024-12)
-- **重大變更**：移除 Rust FFI 依賴，改為純 Swift 實現
-- 解決了 Rust 靜態庫可能導致的閃退問題
-- 新增 `PlayerState`、`StateUpdate`、`ObsEncoder`、`ActionDecoder` 等純 Swift 模組
-- 簡化編譯流程，不再需要 Rust 工具鏈
-- API 保持向後相容（`MortalBot` typealias）
+### v0.5.0
 
-### v0.2.0 (2024-11)
-- 新增強類型 MJAI 事件和動作 API
-- 改進 Tile 類型支援
+- **observation 1012 格全部與 libriichi 逐格一致**（先前有 124 格送全 0）
+- 移植役種判定與符計算（`agari.rs`）
+- 移植單人期望值推演（`algo/sp`）
+- 向聽改用查表（最壞情況 Release 下 36.7 ms）
+- 修正五個狀態機錯誤：向聽剪枝漏算搭子、四枚同牌的假單騎、
+  `shanten` 生命週期、立直成立沒扣分、吃碰槓掛錯河項
+- 副露手的自摸判定改用真正的役種判定，不再樂觀假設有役
 
-### v0.1.x
-- 初始版本，使用 Rust FFI + Core ML
+### v0.4.0
+
+- 建立 libriichi 對拍機制（xcframework 只掛 test target）
+- 對齊 observation 前段佈局
+- **breaking**：`PlayerState.kawa` 型別改為 `[[KawaItem?]]`；
+  `shanten` 語意改為「3n+1 手牌的值」，摸牌後不重算
+
+### v0.3.0
+
+- **breaking**：移除 Rust FFI，改為純 Swift + Core ML
+- 新增 `PlayerState` / `StateUpdate` / `ObsEncoder` / `ActionDecoder`
+
+### v0.2.0
+
+- 新增強型別 MJAI 事件與動作 API
+
+---
+
+## 設計紀錄
+
+- [observation 編碼的方案取捨](docs/decisions/obs-parity.md)
+- [補完最後 124 格的實作筆記](docs/decisions/implementation-notes.md)
+- [模型來源、鑑定方法與三麻現況](docs/decisions/model-provenance.md)
+
+---
 
 ## 授權條款
 
-本專案採用 **AGPL-3.0** 授權，與上游 [Mortal](https://github.com/Equim-chan/Mortal) 專案保持一致。
-
-詳見 [LICENSE](LICENSE) 檔案。
+[AGPL-3.0](LICENSE)，與上游 [Mortal](https://github.com/Equim-chan/Mortal) 一致。
