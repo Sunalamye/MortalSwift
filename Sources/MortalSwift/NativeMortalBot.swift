@@ -142,6 +142,26 @@ public actor NativeMortalBot {
         return ActionDecoder.decode(actionIdx: actionIdx, state: state)
     }
 
+    /// 對**當前狀態**直接跑一次推論，不需要事件觸發。
+    ///
+    /// 為什麼需要這個：MJAI 協定在自己吃／碰／槓之後**不會再送事件**要你打牌，
+    /// 所以 `react` 沒有機會被呼叫，`lastProbs` 停留在副露前那一次的結果。
+    /// 但手牌已經變了——呼叫端若拿舊機率或退回均勻分布，等於那一手完全沒有模型參與。
+    ///
+    /// 這個方法把狀態編碼後直接送進模型，更新 `lastQValues` / `lastProbs` / `lastMask`，
+    /// 並回傳模型選中的動作。沒有合法動作時回傳 nil。
+    ///
+    /// - Returns: 模型選中的動作；沒有合法動作時 nil
+    @discardableResult
+    public func inferCurrentState() async throws -> MJAIAction? {
+        let (obs, mask) = ObsEncoder.encode(state: state)
+        guard mask.contains(where: { $0 != 0 }) else { return nil }
+        lastMask = mask
+
+        let actionIdx = try await selectAction(obs: obs, mask: mask)
+        return ActionDecoder.decode(actionIdx: actionIdx, state: state)
+    }
+
     // MARK: - Public API (JSON)
 
     /// 處理 MJAI 事件 (JSON 格式)

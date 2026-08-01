@@ -6,7 +6,7 @@
 import Foundation
 
 /// Library version
-public let MortalSwiftVersion = "0.5.0"
+public let MortalSwiftVersion = "0.5.1"
 
 /// Backward compatibility alias for NativeMortalBot
 public typealias MortalBot = NativeMortalBot

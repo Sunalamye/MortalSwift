@@ -415,3 +415,49 @@ private let knownUnportedChannels: Set<Int> = {
         Issue.record("預期打牌或立直，實得 \(String(describing: action))")
     }
 }
+
+/// 副露之後必須還能推論
+///
+/// MJAI 協定在自己吃／碰／槓之後不會再送事件要你打牌，`react` 因此不會被呼叫。
+/// 若呼叫端只能拿舊機率或退回均勻分布，那一手就完全沒有模型參與——
+/// 實測 Naki 正是如此（log 裡的 `Using uniform probabilities`）。
+/// `inferCurrentState()` 就是為了補這個洞。
+@Test func inferCurrentStateWorksAfterMeld() async throws {
+    let bot = try MortalBot(playerId: 0, version: 4, useBundledModel: true)
+    guard await bot.hasModel else {
+        Issue.record("模型不存在")
+        return
+    }
+
+    let events = [
+        #"{"type":"start_game","id":0,"names":["P0","P1","P2","P3"]}"#,
+        #"{"type":"start_kyoku","bakaze":"E","dora_marker":"9s","kyoku":1,"honba":0,"kyotaku":0,"oya":0,"scores":[25000,25000,25000,25000],"tehais":[["1m","1m","2m","3m","4m","5m","6m","7m","1p","1p","4s","5s","C"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"]]}"#,
+        #"{"type":"tsumo","actor":0,"pai":"9m"}"#,
+        #"{"type":"dahai","actor":0,"pai":"C","tsumogiri":false}"#,
+        #"{"type":"tsumo","actor":1,"pai":"?"}"#,
+        // 上家打 3s，自己吃
+        #"{"type":"dahai","actor":3,"pai":"3s","tsumogiri":false}"#,
+        #"{"type":"chi","actor":0,"target":3,"pai":"3s","consumed":["4s","5s"]}"#,
+    ]
+
+    var lastAction: MJAIAction?
+    for json in events {
+        guard let data = json.data(using: .utf8),
+              let event = try? JSONDecoder().decode(MJAIEvent.self, from: data) else { continue }
+        lastAction = try await bot.react(event: event)
+    }
+
+    // 吃之後 react 回 nil——這正是問題所在
+    #expect(lastAction == nil, "吃之後 MJAI 不會再要求動作")
+
+    // 但直接推論必須拿得到結果
+    let inferred = try await bot.inferCurrentState()
+    #expect(inferred != nil, "副露後必須還能對當前狀態推論")
+
+    // 而且機率要有差異，不能是均勻分布
+    let probs = await bot.getLastProbs()
+    let nonZero = probs.filter { $0 > 0 }
+    #expect(nonZero.count > 1, "應該有多個合法動作")
+    let allSame = nonZero.allSatisfy { abs($0 - nonZero[0]) < 1e-6 }
+    #expect(!allSame, "機率全部相同代表沒有真的推論")
+}
