@@ -114,7 +114,7 @@ public struct ObsEncoder {
         return ch
     }
 
-    /// 編碼分數 (10 channels)
+    /// 編碼分數 (8 channels：每位玩家 100k 正規化 + 30k 正規化)
     private static func encodeScores(state: PlayerState, obs: inout [Float], startChannel: Int) -> Int {
         var ch = startChannel
 
@@ -136,16 +136,10 @@ public struct ObsEncoder {
             ch += 1
         }
 
-        // 相對分數差
-        let myScore = Float(state.scores[0])
-        for i in 1..<4 {
-            let diff = Float(state.scores[i]) - myScore
-            let normalizedDiff = (diff / 50000.0) + 0.5  // 正規化到 [0, 1]
-            for idx in 0..<34 {
-                obs[ch * obsWidth + idx] = min(1.0, max(0.0, normalizedDiff))
-            }
-            ch += 1
-        }
+        // 註：這裡原本還多編了 3 個「相對分數差」channel，但 libriichi 沒有這一段
+        // （見 docs/reference/libriichi_obs_repr.rs 的 encode_obs：v4 每位玩家只有
+        // 100k 正規化與 30k 正規化共 2 個 channel）。多出來的 3 格會讓其後所有
+        // channel 整體位移，模型收到的每一格語意都跟訓練時不同。
 
         return ch
     }
@@ -170,8 +164,11 @@ public struct ObsEncoder {
     private static func encodeKyoku(state: PlayerState, obs: inout [Float], startChannel: Int) -> Int {
         var ch = startChannel
 
+        // libriichi 的 state.kyoku 是 0-based（東1 = 0），
+        // 而這裡的 state.kyoku 直接取自 MJAI 的 1-based 值，編碼時要先轉換。
+        let kyoku0 = max(0, state.kyoku - 1)
         for kyoku in 0..<4 {
-            if state.kyoku == kyoku {
+            if kyoku0 == kyoku {
                 for idx in 0..<34 {
                     obs[ch * obsWidth + idx] = 1.0
                 }
@@ -186,64 +183,43 @@ public struct ObsEncoder {
     private static func encodeCounters(state: PlayerState, obs: inout [Float], startChannel: Int) -> Int {
         var ch = startChannel
 
-        // 本場 (RBF 編碼)
-        let honbaNorm = Float(state.honba) / 10.0
-        for idx in 0..<34 {
-            obs[ch * obsWidth + idx] = min(1.0, honbaNorm)
-        }
+        // libriichi v4 的 IntegerEncoder 只做 rescale：值 = min(n, cap) / cap，佔 1 個 channel。
+        // （`rbf_intervals` 只在 v2/v3 生效，v4 分支完全忽略它——
+        //   見 docs/reference/libriichi_obs_repr.rs 的 IntegerEncoder::encode）
+        // 本場與立直棒的 cap 都是 10。
+        let cap: Float = 10.0
+
+        let honba = min(Float(state.honba), cap) / cap
+        for idx in 0..<obsWidth { obs[ch * obsWidth + idx] = honba }
         ch += 1
 
-        // 立直棒
-        let kyotakuNorm = Float(state.kyotaku) / 4.0
-        for idx in 0..<34 {
-            obs[ch * obsWidth + idx] = min(1.0, kyotakuNorm)
-        }
+        let kyotaku = min(Float(state.kyotaku), cap) / cap
+        for idx in 0..<obsWidth { obs[ch * obsWidth + idx] = kyotaku }
         ch += 1
 
         return ch
     }
 
-    /// 編碼風 (4 channels)
+    /// 編碼風（2 channels：場風、自風各 1）
+    ///
+    /// libriichi 用的是 `assign(idx, tile_index, 1.0)`——只在該風對應的**牌索引**上打 1，
+    /// 不是整列廣播、也不是 4 格 one-hot。原本寫成 4+4 格 one-hot 會多佔 6 個 channel，
+    /// 讓其後所有 channel 位移。
     private static func encodeWinds(state: PlayerState, obs: inout [Float], startChannel: Int) -> Int {
         var ch = startChannel
 
-        // 場風
-        let bakazeIdx: Int
-        switch state.bakaze {
-        case .east: bakazeIdx = 0
-        case .south: bakazeIdx = 1
-        case .west: bakazeIdx = 2
-        case .north: bakazeIdx = 3
-        default: bakazeIdx = 0
-        }
+        obs[ch * obsWidth + state.bakaze.index] = 1.0
+        ch += 1
 
-        for i in 0..<4 {
-            if i == bakazeIdx {
-                for idx in 0..<34 {
-                    obs[ch * obsWidth + idx] = 1.0
-                }
-            }
-            ch += 1
-        }
+        obs[ch * obsWidth + state.jikaze.index] = 1.0
+        ch += 1
 
-        // 自風
-        let jikazeIdx: Int
-        switch state.jikaze {
-        case .east: jikazeIdx = 0
-        case .south: jikazeIdx = 1
-        case .west: jikazeIdx = 2
-        case .north: jikazeIdx = 3
-        default: jikazeIdx = 0
-        }
-
-        for i in 0..<4 {
-            if i == jikazeIdx {
-                for idx in 0..<34 {
-                    obs[ch * obsWidth + idx] = 1.0
-                }
-            }
-            ch += 1
-        }
+        // 場風與局數的合成編碼：n = min(場風 - 東, 1) * 4 + 局數，cap = 7，只做 rescale
+        let bakazeOffset = min(max(0, state.bakaze.index - Tile.east.index), 1)
+        let n = Float(min(bakazeOffset * 4 + max(0, state.kyoku - 1), 7))
+        let v = n / 7.0
+        for idx in 0..<obsWidth { obs[ch * obsWidth + idx] = v }
+        ch += 1
 
         return ch
     }
