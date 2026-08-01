@@ -26,15 +26,22 @@ enum ShantenTable {
     private static let suhaiSize = 1_940_777
     private static let jihaiSize = 78_032
 
-    private static let suhai: [[UInt8]] = load("shanten_suhai", expecting: suhaiSize)
-    private static let jihai: [[UInt8]] = load("shanten_jihai", expecting: jihaiSize)
+    /// 表攤平成單一連續緩衝區，第 i 列在 `[i*10 ..< i*10+10]`。
+    ///
+    /// 曾經寫成 `[[UInt8]]`（194 萬個獨立陣列），一次查詢要 16 微秒——
+    /// 指標追逐、retain/release、陣列複製，完全沒有 O(1) 的樣子。
+    /// 攤平之後是純算術索引，快取也連續。
+    private static let suhai: [UInt8] = load("shanten_suhai", expecting: suhaiSize)
+    private static let jihai: [UInt8] = load("shanten_jihai", expecting: jihaiSize)
 
     /// 表是否成功載入。載入失敗時呼叫端要退回遞迴版本。
-    static var isAvailable: Bool { suhai.count == suhaiSize && jihai.count == jihaiSize }
+    static var isAvailable: Bool {
+        suhai.count == suhaiSize * entryWidth && jihai.count == jihaiSize * entryWidth
+    }
 
     // MARK: - 載入
 
-    private static func load(_ name: String, expecting count: Int) -> [[UInt8]] {
+    private static func load(_ name: String, expecting count: Int) -> [UInt8] {
         guard let url = Bundle.module.url(forResource: name, withExtension: "bin.gz"),
               let gz = try? Data(contentsOf: url),
               let raw = gunzip(gz) else {
@@ -42,15 +49,13 @@ enum ShantenTable {
         }
 
         // 每 5 個 byte 拆成 10 個 nibble 成為一列
-        var table = [[UInt8]]()
-        table.reserveCapacity(count)
-        var entry = [UInt8](repeating: 0, count: entryWidth)
-        for (i, b) in raw.enumerated() {
-            let slot = (i * 2) % entryWidth
-            entry[slot] = b & 0b1111
-            entry[slot + 1] = (b >> 4) & 0b1111
-            if (i + 1) % 5 == 0 {
-                table.append(entry)
+        var table = [UInt8](repeating: 0, count: count * entryWidth)
+        table.withUnsafeMutableBufferPointer { dst in
+            for (i, b) in raw.enumerated() {
+                let out = (i / 5) * entryWidth + (i * 2) % entryWidth
+                guard out + 1 < dst.count else { break }
+                dst[out] = b & 0b1111
+                dst[out + 1] = (b >> 4) & 0b1111
             }
         }
         return table
@@ -105,15 +110,15 @@ enum ShantenTable {
 
     /// 把一組牌數編成 5 進位的索引
     @inline(__always)
-    private static func sumTiles(_ tehai: [Int], _ range: Range<Int>) -> Int {
+    private static func sumTiles(_ tehai: UnsafeBufferPointer<Int>, _ lo: Int, _ hi: Int) -> Int {
         var acc = 0
-        for i in range { acc = acc * 5 + tehai[i] }
+        for i in lo..<hi { acc = acc * 5 + tehai[i] }
         return acc
     }
 
-    private static func addSuhai(_ lhs: inout [UInt8], _ index: Int, _ m: Int) {
-        let tab = index < suhai.count ? suhai[index] : [UInt8](repeating: 0, count: entryWidth)
-
+    private static func addSuhai(
+        _ lhs: UnsafeMutablePointer<UInt8>, _ tab: UnsafePointer<UInt8>, _ m: Int
+    ) {
         var j = 5 + m
         while j >= 5 {
             var sht = min(lhs[j] &+ tab[0], lhs[0] &+ tab[j])
@@ -140,9 +145,9 @@ enum ShantenTable {
         }
     }
 
-    private static func addJihai(_ lhs: inout [UInt8], _ index: Int, _ m: Int) {
-        let tab = index < jihai.count ? jihai[index] : [UInt8](repeating: 0, count: entryWidth)
-
+    private static func addJihai(
+        _ lhs: UnsafeMutablePointer<UInt8>, _ tab: UnsafePointer<UInt8>, _ m: Int
+    ) {
         let j = m + 5
         var sht = min(lhs[j] &+ tab[0], lhs[0] &+ tab[j])
         var k = 5
@@ -154,11 +159,27 @@ enum ShantenTable {
     }
 
     /// 一般形向聽數
+    ///
+    /// 工作用的 10 格緩衝放在堆疊上，全程沒有堆積配置。
     static func calcNormal(tehai: [Int], lenDiv3: Int) -> Int {
-        var ret = suhai[sumTiles(tehai, 0..<9)]
-        addSuhai(&ret, sumTiles(tehai, 9..<18), lenDiv3)
-        addSuhai(&ret, sumTiles(tehai, 18..<27), lenDiv3)
-        addJihai(&ret, sumTiles(tehai, 27..<34), lenDiv3)
-        return Int(ret[5 + lenDiv3]) - 1
+        tehai.withUnsafeBufferPointer { hand in
+            suhai.withUnsafeBufferPointer { suhaiBuf in
+                jihai.withUnsafeBufferPointer { jihaiBuf in
+                    withUnsafeTemporaryAllocation(of: UInt8.self, capacity: entryWidth) { work in
+                        let base = suhaiBuf.baseAddress!
+                        let jBase = jihaiBuf.baseAddress!
+
+                        let i0 = sumTiles(hand, 0, 9) * entryWidth
+                        for k in 0..<entryWidth { work[k] = base[i0 + k] }
+
+                        addSuhai(work.baseAddress!, base + sumTiles(hand, 9, 18) * entryWidth, lenDiv3)
+                        addSuhai(work.baseAddress!, base + sumTiles(hand, 18, 27) * entryWidth, lenDiv3)
+                        addJihai(work.baseAddress!, jBase + sumTiles(hand, 27, 34) * entryWidth, lenDiv3)
+
+                        return Int(work[5 + lenDiv3]) - 1
+                    }
+                }
+            }
+        }
     }
 }
