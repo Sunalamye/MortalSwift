@@ -25,7 +25,11 @@ public enum ShantenCalculator {
     public static func calcNormal(tehai: [Int], lenDiv3: Int) -> Int {
         guard tehai.count == 34, lenDiv3 >= 0, lenDiv3 <= 4 else { return 6 }
 
-        let raw = calcNormalCore(tehai: tehai, lenDiv3: lenDiv3)
+        // 查表是 O(1)；遞迴版正確但太慢（期望值推演會呼叫數百萬次）。
+        // 表載入失敗時退回遞迴版——寧可慢也不要算錯。
+        let raw = ShantenTable.isAvailable
+            ? ShantenTable.calcNormal(tehai: tehai, lenDiv3: lenDiv3)
+            : calcNormalCore(tehai: tehai, lenDiv3: lenDiv3)
 
         // 「宣稱聽牌」要再確認一次進張存不存在。
         //
@@ -35,6 +39,13 @@ public enum ShantenCalculator {
         //
         // 只對 3n+1 手牌做：3n+2 再加一張就變成 15 張，沒有意義。
         guard raw == 0, tehai.reduce(0, +) == lenDiv3 * 3 + 1 else { return raw }
+
+        // 假聽牌只可能發生在「單騎那張的四枚全在手上」的情形，
+        // 也就是手上一定有某張牌是 4 枚。沒有 4 枚牌就不必逐張試進。
+        //
+        // 這個前置條件不影響正確性，但省掉的是 34 次完整遞迴——
+        // 期望值 DP 的葉節點幾乎都是聽牌手，這裡是整條熱路徑的瓶頸。
+        guard tehai.contains(4) else { return 0 }
 
         for tile in 0..<34 where tehai[tile] < 4 {
             var probe = tehai
@@ -47,7 +58,7 @@ public enum ShantenCalculator {
     }
 
     /// 純面子分解，不檢查進張是否還有剩
-    private static func calcNormalCore(tehai: [Int], lenDiv3: Int) -> Int {
+    static func calcNormalCore(tehai: [Int], lenDiv3: Int) -> Int {
         var minShanten = 8
 
         calcNormalRecursive(

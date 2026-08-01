@@ -201,3 +201,42 @@ private func s(_ n: Int) -> Int { 18 + n - 1 }
 private func + (lhs: StrideThrough<Int>, rhs: [Int]) -> [Int] {
     Array(lhs) + rhs
 }
+
+/// 查表版與遞迴版必須給出相同的向聽數
+///
+/// 查表快、遞迴慢但獨立實作。兩者在大量隨機手牌上一致，
+/// 才敢相信那 190KB 的二進位表被正確解讀了。
+@Test func shantenTableMatchesRecursive() {
+    #expect(ShantenTable.isAvailable, "向聽查表沒載入成功")
+
+    // 固定種子的線性同餘，讓失敗可重現
+    var seed: UInt64 = 0x5DEECE66D
+    func nextInt(_ bound: Int) -> Int {
+        seed = seed &* 6364136223846793005 &+ 1442695040888963407
+        return Int((seed >> 33) % UInt64(bound))
+    }
+
+    var mismatches: [String] = []
+    for _ in 0..<3000 {
+        let lenDiv3 = nextInt(5)
+        let target = lenDiv3 * 3 + 1 + nextInt(2)   // 3n+1 或 3n+2
+        var tehai = [Int](repeating: 0, count: 34)
+        var placed = 0
+        var guard_ = 0
+        while placed < target && guard_ < 200 {
+            guard_ += 1
+            let t = nextInt(34)
+            if tehai[t] < 4 { tehai[t] += 1; placed += 1 }
+        }
+        guard placed == target else { continue }
+
+        let byTable = ShantenTable.calcNormal(tehai: tehai, lenDiv3: lenDiv3)
+        let byRecursion = ShantenCalculator.calcNormalCore(tehai: tehai, lenDiv3: lenDiv3)
+        if byTable != byRecursion {
+            mismatches.append("lenDiv3=\(lenDiv3) 表=\(byTable) 遞迴=\(byRecursion) 手牌=\(tehai)")
+        }
+    }
+
+    for m in mismatches.prefix(5) { print("向聽不一致: \(m)") }
+    #expect(mismatches.isEmpty, "\(mismatches.count) 手牌的查表與遞迴結果不同")
+}

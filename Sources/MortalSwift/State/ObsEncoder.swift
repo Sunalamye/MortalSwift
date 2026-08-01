@@ -373,22 +373,112 @@ public struct ObsEncoder {
         }
         ctx.idx += 1
 
-        // ── 單人期望值表（尚未移植）────────────────────────────────────
+        // ── 單人期望值表 ──────────────────────────────────────────────
         //
-        // libriichi 這裡會呼叫 `single_player_tables()`，用 sp solver 算出
-        // 每張打牌在每一巡的聽牌率／和牌率／期望值。那是 algo/sp（約 50KB Rust）
-        // 加上 agari 役種判定的完整移植，本版尚未做，因此這 123 格全部留 0。
-        //
-        // **保留正確的格數**是關鍵：即使內容是 0，後面沒有東西了，但格數錯會讓
-        // assert 失敗，也代表這份佈局的理解是錯的。
-        ctx.idx += 2                       // encode_ev
-        ctx.idx += 2 * 34                  // 各打牌所需的進張
-        ctx.idx += 2                       // 進張數最多的打牌
-        ctx.idx += 3 * maxNumTurns         // 聽牌率 / 和牌率 / 期望值表
+        // 對每一張可打的牌，往後每一巡的聽牌率／和牌率／期望值。
+        // 算不出來時（牌不夠、已是和了形）整段留 0，與 libriichi 的 Err 分支一致。
+        if let table = state.singlePlayerTables(), !table.isEmpty {
+            // 最大期望值（表已依期望值排序，取第一筆）
+            let maxEV = table[0].expValues.first ?? 0
+            encodeEV(maxEV, &ctx)
+
+            if cans.canDiscard {
+                // 每張打牌所需的進張；向聽戻し的放在後 34 格
+                for candidate in table {
+                    let discardTid = SPTile.deaka(candidate.tile)
+                    guard discardTid < 34 else { continue }
+                    for required in candidate.requiredTiles {
+                        let requiredTid = SPTile.deaka(required.tile)
+                        let row = candidate.shantenDown
+                            ? ctx.idx + 34 + discardTid
+                            : ctx.idx + discardTid
+                        ctx.assign(row, requiredTid, 1.0)
+                    }
+                }
+                ctx.idx += 2 * 34
+
+                // 進張數最多的那張打牌
+                if let best = table.max(by: { lhs, rhs in
+                    if lhs.shantenDown != rhs.shantenDown { return lhs.shantenDown }
+                    return lhs.numRequiredTiles < rhs.numRequiredTiles
+                }) {
+                    ctx.assign(ctx.idx, SPTile.deaka(best.tile), 1.0)
+                }
+                ctx.idx += 2
+            } else {
+                ctx.idx += 2 * 34 + 1
+                for required in table[0].requiredTiles {
+                    ctx.assign(ctx.idx, SPTile.deaka(required.tile), 1.0)
+                }
+                ctx.idx += 1
+            }
+
+            let evScale: Float = maxEV < 1 ? 0 : 1 / maxEV
+            encodeSPTable(table, canDiscard: cans.canDiscard, evScale: evScale, &ctx)
+        } else {
+            // 保留正確的格數：內容缺失只是資訊少，格數錯則是其後全部語意錯位
+            ctx.idx += 2                       // 期望值
+            ctx.idx += 2 * 34                  // 各打牌所需的進張
+            ctx.idx += 2                       // 進張數最多的打牌
+            ctx.idx += 3 * maxNumTurns         // 聽牌率 / 和牌率 / 期望值表
+        }
 
         assert(ctx.idx == obsChannels, "channel 佈局錯誤：寫到 \(ctx.idx)，應為 \(obsChannels)")
 
         return (ctx.obs, ctx.mask)
+    }
+
+    // MARK: - 單人期望值表
+
+    /// 期望值編成兩格：100k 與 30k 兩種正規化
+    private static func encodeEV(_ value: Float, _ ctx: inout Context) {
+        ctx.fill(ctx.idx, min(max(value, 0), 100_000) / 100_000)
+        ctx.fill(ctx.idx + 1, min(max(value, 0), 30_000) / 30_000)
+        ctx.idx += 2
+    }
+
+    /// 聽牌率 / 和牌率 / 期望值各 17 巡，共 51 格
+    private static func encodeSPTable(
+        _ table: [SPCandidate], canDiscard: Bool, evScale: Float, _ ctx: inout Context
+    ) {
+        // 機率根本沒算（向聽 >= 4）或全為 0 時什麼都不寫
+        guard let first = table.first, (first.tenpaiProbs.first ?? 0) > 0 else {
+            ctx.idx += 3 * maxNumTurns
+            return
+        }
+
+        func write(_ turn: Int, _ tenpai: Float, _ win: Float, _ ev: Float, tile: Int?) {
+            guard turn < maxNumTurns else { return }
+            let evClamped = min(ev * evScale, 1)
+            if let tile {
+                ctx.assign(ctx.idx + turn, tile, tenpai)
+                ctx.assign(ctx.idx + turn + maxNumTurns, tile, win)
+                ctx.assign(ctx.idx + turn + 2 * maxNumTurns, tile, evClamped)
+            } else {
+                ctx.fill(ctx.idx + turn, tenpai)
+                ctx.fill(ctx.idx + turn + maxNumTurns, win)
+                ctx.fill(ctx.idx + turn + 2 * maxNumTurns, evClamped)
+            }
+        }
+
+        if canDiscard {
+            for candidate in table {
+                let tid = SPTile.deaka(candidate.tile)
+                guard tid < 34 else { continue }
+                for turn in 0..<candidate.tenpaiProbs.count {
+                    guard candidate.tenpaiProbs[turn] > 0 else { break }
+                    write(turn, candidate.tenpaiProbs[turn],
+                          candidate.winProbs[turn], candidate.expValues[turn], tile: tid)
+                }
+            }
+        } else {
+            for turn in 0..<first.tenpaiProbs.count {
+                guard first.tenpaiProbs[turn] > 0 else { break }
+                write(turn, first.tenpaiProbs[turn],
+                      first.winProbs[turn], first.expValues[turn], tile: nil)
+            }
+        }
+        ctx.idx += 3 * maxNumTurns
     }
 
     // MARK: - Kawa Helpers

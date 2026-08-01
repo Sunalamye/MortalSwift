@@ -181,8 +181,7 @@ private func mismatchedChannels(_ snapshot: ParitySnapshot) -> [Int] {
 ///
 /// 這不是「容許誤差」——是**明確標示還沒做完的部分**。移植完成後這個集合要清空。
 private let knownUnportedChannels: Set<Int> = {
-    var s: Set<Int> = []
-    s.formUnion(889..<1012)        // 單人期望值表（需要 algo/sp）
+    let s: Set<Int> = []
     return s
 }()
 
@@ -326,4 +325,54 @@ private let knownUnportedChannels: Set<Int> = {
     var complete = t
     complete[24] = 1
     #expect(ShantenCalculator.calcAll(tehai: complete, lenDiv3: 4) == -1, "補上 7s 是和了形")
+}
+
+/// 單次 observation 編碼的耗時
+///
+/// 單人期望值推演是遞迴 + 記憶化的機率 DP，最壞情況很重。
+/// 這東西要在對局中即時跑，所以延遲必須量出來，不能只看正確性。
+@Test func encodeLatency() {
+    let state = PlayerState(playerId: 0)
+    for json in fullEvents {
+        guard let data = json.data(using: .utf8),
+              let event = try? JSONDecoder().decode(MJAIEvent.self, from: data) else { continue }
+        _ = state.update(event: event)
+    }
+
+    // 暖身一次，避免把首次配置成本算進去
+    _ = ObsEncoder.encode(state: state)
+
+    let rounds = 5
+    let start = DispatchTime.now().uptimeNanoseconds
+    for _ in 0..<rounds { _ = ObsEncoder.encode(state: state) }
+    let elapsed = DispatchTime.now().uptimeNanoseconds - start
+    let msPerCall = Double(elapsed) / Double(rounds) / 1_000_000
+
+    print("=== observation 編碼耗時 ===")
+    print(String(format: "  每次 %.1f ms（%d 次平均）", msPerCall, rounds))
+    print(String(format: "  向聽 %d，剩餘 %d 張", state.realTimeShanten(), state.tilesLeft))
+}
+
+/// 最壞情況：開局、三向聽、牌山幾乎全滿——期望值 DP 的分支在這裡最多
+@Test func encodeLatencyWorstCase() {
+    let events: [String] = [
+        #"{"type":"start_game","id":0,"names":["A","B","C","D"]}"#,
+        // 散牌手：進張多、分支多
+        #"{"type":"start_kyoku","bakaze":"E","dora_marker":"3s","kyoku":1,"honba":0,"kyotaku":0,"oya":0,"scores":[25000,25000,25000,25000],"tehais":[["1m","3m","5m","7m","9m","2p","4p","6p","8p","1s","3s","5s","7s"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"]]}"#,
+        #"{"type":"tsumo","actor":0,"pai":"5p"}"#,
+    ]
+    let state = PlayerState(playerId: 0)
+    for json in events {
+        guard let data = json.data(using: .utf8),
+              let event = try? JSONDecoder().decode(MJAIEvent.self, from: data) else { continue }
+        _ = state.update(event: event)
+    }
+
+    let start = DispatchTime.now().uptimeNanoseconds
+    _ = ObsEncoder.encode(state: state)
+    let ms = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+
+    print("=== 最壞情況編碼耗時 ===")
+    print(String(format: "  %.1f ms", ms))
+    print("  向聽 \(state.realTimeShanten())，剩餘 \(state.tilesLeft) 張")
 }

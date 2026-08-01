@@ -30,7 +30,10 @@ let package = Package(
                 "MortalBot.swift"  // 排除舊的 FFI 版本
             ],
             resources: [
-                .copy("Resources/mortal.mlmodelc")
+                .copy("Resources/mortal.mlmodelc"),
+                // 向聽查表（見 ShantenTable.swift）
+                .copy("Resources/shanten_suhai.bin.gz"),
+                .copy("Resources/shanten_jihai.bin.gz"),
             ]
         ),
 
