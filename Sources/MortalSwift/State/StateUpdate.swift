@@ -538,12 +538,24 @@ extension PlayerState {
         updateDoraFactor()
     }
 
+    /// 三麻拔北
+    ///
+    /// 拔北把手上的北抽出去、再補一張嶺上牌，跟加槓一樣是「手牌少 1、補 1」，
+    /// 組數不變（`tehaiLenDiv3` 不動），但**手牌組成變了**。
+    /// 原本這裡只做 `removeTile` 就結束，向聽與等待留在拔北前的舊值——
+    /// 拔北後真正聽牌卻仍顯示 1 向聽（`waits` 全空），自摸判定與 obs 都會錯。
+    /// 其他每個會動到手牌的 handler（吃／碰／大明槓／暗槓／加槓／打牌）都有補算，
+    /// 只有這裡漏了。四麻收不到 nukidora，所以一直沒被打到，但三麻路線會踩。
     private func handleNukidora(_ event: NukidoraEvent) {
         let relActor = toRelative(event.actor)
         markTileSeen(event.pai)
 
         if relActor == 0 {
             removeTile(event.pai)
+
+            // 拔北後手牌是 3n+1，與打牌後同型，此時算得了等待
+            updateShanten()
+            updateWaits()
         }
     }
 

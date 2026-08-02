@@ -691,5 +691,35 @@ private func feedTsumoDahai(_ state: PlayerState, actor: Int, pai: String) -> Bo
             "碰後向聽必須是重算過的值")
 }
 
+// MARK: - 三麻拔北
+
+/// 拔北之後向聽與等待要跟著手牌走
+///
+/// `handleNukidora` 原本只做 `markTileSeen` + `removeTile`，沒有重算。
+/// 這條劇本拔北前是 1 向聽、拔北後是聽牌，漏算的話 `shanten` 會卡在 1、
+/// `waits` 整排是空的——自摸判定與 obs 都會拿到拔北前的舊值。
+@Test func testNukidoraRecomputesShantenAndWaits() {
+    // 起手 13 張：234m 678m 234p + 5p5p + 6s + N → 1 向聽
+    let state = makeState(tehai: ["2m","3m","4m","6m","7m","8m","2p","3p","4p",
+                                  "5p","5p","6s","N"])
+    #expect(state.shanten == 1, "拔北前是 1 向聽")
+    #expect(!state.waits.contains(true), "1 向聽沒有等待")
+
+    // 摸 6s → 14 張（摸牌不重算向聽，與 libriichi 一致）
+    _ = state.update(event: .tsumo(TsumoEvent(actor: 0, pai: Tile(mjaiString: "6s")!)))
+    #expect(state.shanten == 1, "摸牌本身不重算向聽")
+
+    // 拔北 → 手牌回到 3n+1：234m 678m 234p + 5p5p + 6s6s，聽 5p/6s 雙碰
+    _ = state.update(event: .nukidora(NukidoraEvent(
+        actor: 0, pai: Tile(mjaiString: "N")!)))
+
+    #expect(state.tehai[Tile.north.index] == 0, "北已從手牌抽走")
+    #expect(state.tehaiLenDiv3 == 4, "拔北補嶺上一張，手牌組數不變")
+    #expect(state.shanten == 0, "拔北後是聽牌，向聽必須跟著手牌重算")
+    #expect(state.waits[Tile(mjaiString: "5p")!.index], "應聽 5p")
+    #expect(state.waits[Tile(mjaiString: "6s")!.index], "應聽 6s")
+    #expect(state.waits.filter { $0 }.count == 2, "只有 5p/6s 這兩張")
+}
+
 // MARK: - Observation 覆蓋率診斷（非斷言，用來量化與 libriichi 的落差）
 
