@@ -2,10 +2,6 @@
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
-import Foundation
-
-// Get the package directory for absolute paths
-let packageDir = URL(fileURLWithPath: #file).deletingLastPathComponent().path
 
 let package = Package(
     name: "MortalSwift",

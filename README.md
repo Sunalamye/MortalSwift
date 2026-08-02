@@ -1,6 +1,6 @@
 # MortalSwift
 
-[![Version](https://img.shields.io/badge/version-0.5.0-blue.svg)](https://github.com/Sunalamye/MortalSwift/releases)
+[![Version](https://img.shields.io/badge/version-0.5.2-blue.svg)](https://github.com/Sunalamye/MortalSwift/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%2013%2B%20%7C%20iOS%2016%2B-lightgrey.svg)](https://github.com/Sunalamye/MortalSwift)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
 
@@ -46,11 +46,14 @@ xcframework 純粹是測試時的基準。
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/Sunalamye/MortalSwift.git", from: "0.5.0")
+    .package(url: "https://github.com/Sunalamye/MortalSwift.git", from: "0.5.2")
 ]
 ```
 
 Xcode：File → Add Package Dependencies → 貼上儲存庫 URL
+
+> 版本以 **git tag** 與 `MortalSwiftVersion`（`Sources/MortalSwift/MortalSwift.swift`）
+> 為準，README 的數字只是摘要。兩邊對不上時信程式碼，不要信這裡。
 
 ---
 
@@ -84,7 +87,31 @@ if let action = try await bot.react(event: .tsumo(
 let json = try await bot.react(mjaiEvent: #"{"type":"tsumo","actor":0,"pai":"5m"}"#)
 ```
 
-`MortalBot` 是 `actor`，Core ML 推論在背景執行，不會卡住主執行緒。
+`MortalBot` 是 `NativeMortalBot` 的別名，本體是 `actor`——所有成員都要 `await`，
+Core ML 推論再從 actor 跳到背景執行，不會卡住主執行緒。
+
+---
+
+## 副露之後：`inferCurrentState()`
+
+MJAI 協定裡，自己吃／碰／槓成功之後**伺服器不會再送一個事件叫你打牌**。
+對 `react(event:)` 來說這代表它根本沒有機會被呼叫，`lastProbs` 會停在副露前
+那一次的結果——但手牌已經變了。呼叫端此時若拿舊機率、或退回均勻分布，
+那一手等於完全沒有模型參與。
+
+`inferCurrentState()` 是給這個缺口用的：不需要事件，直接對**當前狀態**編碼、
+送進模型，更新 `lastQValues` / `lastProbs` / `lastMask`，並回傳選中的動作。
+
+```swift
+// 自己碰成功之後（MJAI 不會再送事件）
+if let action = try await bot.inferCurrentState() {
+    print(action)          // 例如 .dahai(...)
+}
+// 沒有合法動作時回 nil；此時 last* 不會被覆蓋
+```
+
+它與 `react` 共用同一份 observation 快取（失效判準是 `PlayerState.revision`），
+所以「先問遮罩、再問候選、再推論」不會把最貴的期望值 DP 重跑三次。
 
 ---
 
@@ -97,10 +124,13 @@ Sources/MortalSwift/
 ├── Models/
 │   ├── Tile.swift            牌的表示與轉換
 │   ├── MJAIEvent.swift       輸入事件
-│   └── MJAIAction.swift      輸出動作
+│   ├── MJAIAction.swift      輸出動作
+│   └── MortalError.swift     錯誤型別
 ├── State/
 │   ├── PlayerState.swift     對局狀態
 │   ├── StateUpdate.swift     事件 → 狀態
+│   ├── ActionCandidate.swift 當下可做哪些動作
+│   ├── KawaItem.swift        牌河項（捨牌／被鳴走）
 │   ├── ObsEncoder.swift      狀態 → 1012×34 張量
 │   ├── ActionDecoder.swift   模型輸出 → 動作
 │   └── SinglePlayerTables.swift
@@ -128,25 +158,43 @@ Sources/MortalSwift/
 
 ## 主要 API
 
-### MortalBot
+### MortalBot（＝ `NativeMortalBot`，`actor`）
+
+以下是宣告的原樣；因為是 actor，跨 actor 呼叫都要加 `await`。
 
 ```swift
+// 常數與內建模型
+static let actionSpace = 46
+static let obsChannels = 1012
+static let obsWidth = 34
+nonisolated static var bundledModelURL: URL? { get }
+
+// 建構
 init(playerId: Int, version: Int = 4, useBundledModel: Bool = true) throws
 init(playerId: Int, version: Int = 4, modelURL: URL?) throws
+var hasModel: Bool { get }
 
+// 事件驅動
 func react(event: MJAIEvent) async throws -> MJAIAction?
-func react(mjaiEvent: String) async throws -> String?
 func reactSync(event: MJAIEvent) throws -> MJAIAction?
+func react(mjaiEvent: String) async throws -> String?
+func reactSync(mjaiEvent: String) throws -> String?
+
+// 不靠事件，直接對當前狀態推論（副露之後用這個）
+@discardableResult
+func inferCurrentState() async throws -> MJAIAction?
 
 // 推論細節
-var hasModel: Bool { get async }
-func getLastQValues() async -> [Float]
-func getLastProbs() async -> [Float]
-func getObservation() async -> [Float]
-func getMask() async -> [UInt8]
-func getCandidateActions() async -> [MahjongAction]
-func selectActionManually(_ index: Int) async
-func reset() async
+func getLastQValues() -> [Float]
+func getLastProbs() -> [Float]
+func getLastSelectedAction() -> Int
+func getLastMask() -> [UInt8]
+func getObservation() -> [Float]
+func getMask() -> [UInt8]
+func getCandidateActions() -> [MJAIAction]
+
+// 真正跑過幾次完整 encode（快取命中不計，測試用）
+func getEncodeCount() -> Int
 ```
 
 ### 演算法（可獨立使用）
@@ -208,17 +256,26 @@ ActionDecoder ──→ MJAIAction
 ## 驗證與效能
 
 ```bash
-swift test              # 47 個測試
+swift test              # 67 個測試
 swift test -c release   # 效能數字要看這個
 ```
 
 測試涵蓋：
 
-- **observation 對拍** — 對 libriichi 逐格比對，兩套劇本（含碰、他家立直、手切）
-- **役種判定** — libriichi `agari.rs` 自己的 24 個案例
+- **observation／mask 對拍** — 對 libriichi 逐格比對，19 套劇本（含碰、他家立直、
+  手切、紅五、振聽、食い替え、王牌區死牌）
+- **紅五動作索引** — 34–36 的解碼、立直後打紅五、手上沒紅五時該回 nil
+- **振聽** — 同巡振聽在自家打牌後解除、立直振聽永久、振聽不擋自摸、
+  且只影響 channel 861
+- **食い替え** — 副露後該禁的禁到、不該禁的沒被牽連、下次摸牌時解除
+- **役種判定** — libriichi `agari.rs` 逐字移植的 22 條斷言
 - **點數換算** — 完整符 × 飜對照表
 - **向聽** — libriichi 的 19 個案例，外加查表版與遞迴版在 3000 手隨機牌上互相對照
-- **端到端** — 模型在答案毫無爭議的局面上是否給出該答案
+- **編碼快取／memcpy** — 同一個狀態版本只 encode 一次（`getEncodeCount()` 證明），
+  且快取值與重算值逐格相同；memcpy 進 `MLMultiArray` 與逐格裝箱結果相同
+- **延遲門檻** — 超標會**失敗**而不只是印數字（Debug／Release 各一組門檻）
+- **端到端** — 模型在答案毫無爭議的局面上是否給出該答案，以及副露後
+  `inferCurrentState()` 是否真的推得動
 
 ### 效能
 
@@ -226,8 +283,11 @@ swift test -c release   # 效能數字要看這個
 
 | 情境 | Debug | **Release** |
 |------|-------|------------|
-| 聽牌 | 3.6 ms | **0.1 ms** |
-| 開局三向聽（最壞） | 1,225 ms | **36.7 ms** |
+| 聽牌 | 3.5 ms | **0.1 ms** |
+| 開局三向聽（最壞） | 1,190 ms | **36.0 ms** |
+
+數字由 `encodeLatency` / `encodeLatencyWorstCase` 兩個測試自己印出來，
+不是手抄的——換機器就重跑一次，不要相信這張表。
 
 ⚠️ **`swift test` 預設是 debug build。** 兩者差 33 倍，
 拿 debug 數字判斷效能會得到錯誤結論（這件事實際發生過，見設計紀錄）。
@@ -250,6 +310,28 @@ swift test -c release   # 效能數字要看這個
 ---
 
 ## 更新日誌
+
+### v0.5.2
+
+- **打紅五有自己的動作索引**（34–36）：先前解碼只認 0–33，手上有紅五時會打出
+  普通五或直接解不出來
+- **同巡振聽改成自家打牌後解除**，不再一路掛到下一巡；立直振聽維持永久
+- **實作食い替え禁手**：吃碰之後禁打現物與筋牌，下次摸牌時解除
+- **拔北後補算向聽與等待**（先前拔北不會讓狀態重算）
+- **嶺上旗標會熄滅**：`atRinshan` 先前槓過一次就一路 true，害副露無役手被判成
+  可以自摸和
+- observation 以 `PlayerState.revision` 為準快取，同一狀態連問遮罩／候選只算一次；
+  Core ML 輸入改整塊 `memcpy`，不再逐格裝箱 `NSNumber`
+- 刪掉走 Rust FFI 的 `MortalBot.swift` 死碼（它靠 `Package.swift` 的 `exclude`
+  排在編譯外，是「移掉一行組態就編不過」的陷阱），`MortalBot` 現在只是
+  `NativeMortalBot` 的 typealias
+- **breaking**：移除只被寫、沒有被讀的 `PlayerState` 欄位
+  （`isAllLast`／`isWRiichi`／`kansOnBoard`／`dorasOwned`／`dorasSeen`／`atIppatsu`）
+
+### v0.5.1
+
+- 新增 `inferCurrentState()`：MJAI 在自家副露之後不會再送事件，
+  沒有它的話那一手拿到的是副露前的舊機率
 
 ### v0.5.0
 
