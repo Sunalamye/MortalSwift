@@ -398,6 +398,13 @@ public struct ObsEncoder {
                 ctx.idx += 2 * 34
 
                 // 進張數最多的那張打牌
+                //
+                // ⚠️ 已知落差（現有劇本全過，但不是全對）：libriichi 寫的是
+                // `max_by(|l, r| l.cmp(r, NotShantenDown))`，而 `Candidate::cmp` 的
+                // 次要排序鍵不在 `docs/reference/` 裡，所以「進張數並列時挑哪一張」
+                // 還原不出來。實測過的三個並列局面裡，兩個是取第一個、一個是取第二個，
+                // 單純換成「取最後一個」反而讓 minimal / aka-discard 對不上。
+                // 補回 libriichi 的 `algo/sp` 之前先維持取第一個。
                 if let best = table.max(by: { lhs, rhs in
                     if lhs.shantenDown != rhs.shantenDown { return lhs.shantenDown }
                     return lhs.numRequiredTiles < rhs.numRequiredTiles

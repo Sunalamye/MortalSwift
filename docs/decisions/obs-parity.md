@@ -167,7 +167,58 @@ observation 佈局該讀 `obs_repr.rs`、`shanten` 何時該重算該讀 `update
 兩者都與紅五本身無關，是紅五劇本走到了先前沒人走過的路徑才暴露出來的。
 這正是「修規則 bug 前先補對應劇本」的理由。
 
+## 補記（2026-08-02）：振聽劇本
+
+原本七個劇本**一次榮和機會都沒有**，所以 ch861（振聽）與 mask[43]（榮）兩邊
+永遠都是 0——跟紅五那次一樣，「零落差」在振聽這一段什麼都沒驗到。
+補了六個劇本（`furiten-miss` / `furiten-miss-then-tsumo` / `furiten-riichi` /
+`furiten-discard` / `furiten-no-yaku` / `furiten-meld`），並加一條
+`furitenScenariosActuallyExerciseFuritenChannel` 斷言**每一條**劇本都真的走進過振聽、
+而且劇本群裡出現過「振聽擋掉榮和」的形狀。
+
+用 xcframework 逐事件對拍後，libriichi 的振聽語意是這樣（全部是量出來的，不是讀碼猜的）：
+
+| 情境 | ch861 何時變 1 | 何時變回 0 |
+|------|---------------|-----------|
+| 見逃（這張榮得了但沒榮） | **下一個事件**才變 1（被問要不要榮的那一格是 0） | 自家**打牌**後（自家摸牌不解除） |
+| 待牌流過但無役榮不了 | 待牌流過的**當下**就變 1 | 同上 |
+| 自己打過待牌（捨牌振聽） | 自家打牌後重算時 | 聽牌改變且新待牌都沒打過時 |
+| 立直成立後見逃 | 同見逃 | **永不解除** |
+
+實作對應：`pendingSameCycleFuriten`（libriichi 的 `to_mark_same_cycle_furiten`）
+在 `update()` 開頭 take；`updateFuriten()` 改成每次自家打牌重算，立直時只增不減。
+原本 `updateFuriten()` 只會寫 `true`、局內沒有任何路徑寫回 `false`，
+見逃一次之後整局的榮和就被鎖死。
+
+補完後同樣抓到兩個與振聽無關、只是先前沒人走過那條路的落差：
+
+1. **榮和沒有役判定** — `canRon` 只看「在 waits 裡且不振聽」。門前**不是**役
+   （門前清自摸和只算自摸），無役聽牌 libriichi 的 mask[43] 是 0。
+   補上 `AgariCalculator(isRon: true).hasYaku()`（立直／河底走捷徑）。
+2. **自家副露的 tiles_seen 重覆計數（ch835）** — 吃／碰／槓把 `consumed` 一律當成
+   「新亮出來的牌」標記已見，但那是**自己手上**的牌，配牌／摸牌時就算過了。
+   先前的劇本沒有任何一次自家副露，所以看不到。連帶讓 ch889–1011 的單人期望值
+   整段偏掉（牌山剩餘張數算錯）——修掉 ch835 之後那 33 格自動歸零。
+
 ### 這一輪仍未修的已知缺口
+
+**單人期望值表（`algo/sp`）還原不完整**，兩處實測落差，都與振聽無關：
+
+1. **SP 算不出來時的 fallback** — libriichi 在 `single_player_tables()` 回 `Err` 時，
+   會改用「最小自摸和了點數」當期望值填 ch889/890（`obs_repr.rs:612-623`）；
+   純 Swift 那兩格留 0。自摸到自己的待牌（含天和／地和）就會走到。
+   要補完得先有和了點數與天和／地和的加飜。
+2. **ch959「進張數最多的打牌」的並列規則** — libriichi 用
+   `max_by(|l, r| l.cmp(r, NotShantenDown))`，`Candidate::cmp` 的次要排序鍵
+   不在 `docs/reference/` 裡。實測三個並列局面：兩個取第一個、一個取第二個，
+   單純改成「取最後一個」反而讓 minimal / aka-discard 對不上。維持取第一個。
+
+兩者都需要把 libriichi 的 `algo/sp` 取回來逐段對照才做得完，
+**不要靠黑箱猜**——這一輪已經驗證過猜的代價。
+現有劇本刻意繞開這兩條路徑（見 `furitenDiscardEvents` 的註解），
+所以對拍仍是零落差；但那是「沒踩到」，不是「已經對」。
+
+### 先前那一輪仍未修的已知缺口
 
 `aka-riichi` 劇本會走到自家 `reach` 事件。MJAI 在你宣告立直之後還會要你打一張，
 libriichi 因此回 `ACTION_REQUIRED`，純 Swift 的 `update` 對自家宣告事件

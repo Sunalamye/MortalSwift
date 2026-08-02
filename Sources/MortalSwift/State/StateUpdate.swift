@@ -22,6 +22,14 @@ extension PlayerState {
         // 生命週期由 handleStartKyoku（開局重置）與 handleDahai（取用後清空）負責。
         lastCans = ActionCandidate()
 
+        // 見逃在**下一個事件**才變成同巡振聽（見 `pendingSameCycleFuriten`）。
+        // libriichi 也是在 update 的開頭 take 這個旗標，所以「被問要不要榮」的那一格
+        // 是 0，而下一個時點（別人摸牌、或自己吃碰之後要打牌）就是 1。
+        if pendingSameCycleFuriten {
+            pendingSameCycleFuriten = false
+            atFuriten = true
+        }
+
         switch event {
         case .startGame:
             reset()
@@ -135,6 +143,7 @@ extension PlayerState {
         atRinshan = false
         atIppatsu = false
         atFuriten = false
+        pendingSameCycleFuriten = false
 
         lastSelfTsumo = nil
         lastKawaTile = nil
@@ -326,8 +335,9 @@ extension PlayerState {
         // 副露資訊暫存，等 actor 打出下一張時掛到他自己的河項上。
         // 吃一定來自上家，不會跳過任何人，所以不需要補輪次。
         intermediateChiPon = ChiPon(consumed: event.consumed, targetTile: event.pai)
-        // 副露亮出來的牌，對所有人都算「已見」
-        for tile in event.consumed { markTileSeen(tile) }
+        // 副露亮出來的牌，對別人來說是新資訊；**自己的**那幾張在配牌／摸牌時
+        // 就已經算過「已見」，再算一次會重覆計數（ch835 tiles_seen 會多算）。
+        if relActor != 0 { for tile in event.consumed { markTileSeen(tile) } }
 
         if relActor == 0 {
             // 自己吃
@@ -361,8 +371,9 @@ extension PlayerState {
         fuuroOverview[relActor].append(meld)
 
         intermediateChiPon = ChiPon(consumed: event.consumed, targetTile: event.pai)
-        // 副露亮出來的牌，對所有人都算「已見」
-        for tile in event.consumed { markTileSeen(tile) }
+        // 副露亮出來的牌，對別人來說是新資訊；**自己的**那幾張在配牌／摸牌時
+        // 就已經算過「已見」，再算一次會重覆計數（ch835 tiles_seen 會多算）。
+        if relActor != 0 { for tile in event.consumed { markTileSeen(tile) } }
         padKawaForPonOrDaiminkan(absActor: event.actor, absTarget: event.target)
 
         if relActor == 0 {
@@ -391,7 +402,9 @@ extension PlayerState {
         fuuroOverview[relActor].append(meld)
 
         intermediateKan.append(event.pai)
-        for tile in event.consumed { markTileSeen(tile) }
+        // 副露亮出來的牌，對別人來說是新資訊；**自己的**那幾張在配牌／摸牌時
+        // 就已經算過「已見」，再算一次會重覆計數（ch835 tiles_seen 會多算）。
+        if relActor != 0 { for tile in event.consumed { markTileSeen(tile) } }
         padKawaForPonOrDaiminkan(absActor: event.actor, absTarget: event.target)
 
         kansOnBoard += 1
@@ -423,7 +436,9 @@ extension PlayerState {
         ankanOverview[relActor].append(event.consumed.map { $0.deaka })
 
         intermediateKan.append(event.consumed[0])
-        for tile in event.consumed { markTileSeen(tile) }
+        // 副露亮出來的牌，對別人來說是新資訊；**自己的**那幾張在配牌／摸牌時
+        // 就已經算過「已見」，再算一次會重覆計數（ch835 tiles_seen 會多算）。
+        if relActor != 0 { for tile in event.consumed { markTileSeen(tile) } }
 
         kansOnBoard += 1
 
@@ -450,7 +465,8 @@ extension PlayerState {
         let relActor = toRelative(event.actor)
 
         intermediateKan.append(event.pai)
-        markTileSeen(event.pai)
+        // 同上：加槓亮出來的那張若是自己的，早就算過「已見」了
+        if relActor != 0 { markTileSeen(event.pai) }
 
         // 更新副露
         if relActor == 0 {
@@ -544,16 +560,30 @@ extension PlayerState {
         lastCans = ActionCandidate()
         lastCans.targetActor = relActor
 
+        let ronnable = canRon(tile: tile)
+        let tid = tile.deaka.index
+
+        // 待牌流過去了 → 振聽。分兩條路，時機不同（兩者都以 libriichi 逐事件對拍確認）：
+        //
+        // - 這張榮得了：現在還沒振聽（obs ch861 這一格必須是 0，否則等於在問「要不要榮」
+        //   的同時告訴模型「你已經榮不了」）。真的放過才成立，所以延後到下一個事件。
+        // - 這張榮不了（無役，或已經在振聽）：沒有選擇可言，當下就標成振聽。
+        if tid >= 0 && tid < 34 && waits[tid] {
+            if ronnable {
+                pendingSameCycleFuriten = true
+            } else {
+                atFuriten = true
+            }
+        }
+
         // 如果已立直，只能榮和
         if riichiAccepted[0] {
-            if canRon(tile: tile) {
-                lastCans.canRonAgari = true
-            }
+            lastCans.canRonAgari = ronnable
             return
         }
 
         // 檢查榮和
-        if canRon(tile: tile) {
+        if ronnable {
             lastCans.canRonAgari = true
         }
 
@@ -773,12 +803,20 @@ extension PlayerState {
         isAllLast = (bakaze == .south && kyoku >= 3)
     }
 
+    /// 自家打牌後重算振聽
+    ///
+    /// libriichi 的振聽是三種來源合成一格 `at_furiten`（用 xcframework 逐事件對拍確認）：
+    ///
+    /// 1. **捨牌振聽**：待牌裡有任何一張自己打過。它是**算出來的**，不是黏著的旗標——
+    ///    改聽之後如果新的待牌都沒打過，就自動解除（實測：打 6s 後聽 6s/9s 是振聽，
+    ///    後來改聽 5p 單騎就解除）。
+    /// 2. **同巡振聽**：見逃造成，在別人打牌時標（見 `pendingSameCycleFuriten`），
+    ///    在這裡被上面那個重算蓋掉——這就是「過一巡自動解除」的實作方式。
+    ///    原本這個函式只會 `= true`、永遠不寫 false，整局的榮和因此被鎖死。
+    /// 3. **立直振聽**：立直成立後聽牌不會再變，振聽只增不減，所以這裡不能把它洗掉。
     private func updateFuriten() {
-        // 檢查同巡振聽和立直後振聽
-        for idx in 0..<34 where waits[idx] && discardedTiles[idx] {
-            atFuriten = true
-            return
-        }
+        let discardFuriten = (0..<34).contains { waits[$0] && discardedTiles[$0] }
+        atFuriten = riichiAccepted[0] ? (atFuriten || discardFuriten) : discardFuriten
     }
 
     private func canDeclareRiichi() -> Bool {
@@ -806,7 +844,27 @@ extension PlayerState {
         guard !atFuriten else { return false }
 
         let idx = tile.deaka.index
-        return waits[idx]
+        guard idx >= 0 && idx < 34 && waits[idx] else { return false }
+        return ronHasYaku(tileIndex: idx)
+    }
+
+    /// 榮和有沒有役
+    ///
+    /// 自摸可以靠「門前清自摸和」保底，**榮和不行**——門前本身不是役。
+    /// 少了這一關會把無役聽牌當成可榮（libriichi 在同樣局面 mask[43] 是 0），
+    /// 送出去會被伺服器打回來。
+    private func ronHasYaku(tileIndex idx: Int) -> Bool {
+        // 立直本身是役；河底撈魚同理
+        if riichiAccepted[0] || tilesLeft == 0 { return true }
+
+        var complete = tehai
+        complete[idx] += 1
+        return AgariCalculator(
+            tehai: complete, isMenzen: isMenzen,
+            chis: chis, pons: pons, minkans: minkans, ankans: ankans,
+            bakaze: bakaze.index, jikaze: jikaze.index,
+            winningTile: idx, isRon: true
+        ).hasYaku()
     }
 
     private func calculateAnkanCandidates() {

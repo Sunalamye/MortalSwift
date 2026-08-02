@@ -199,6 +199,159 @@ private let akaMeldEvents: [String] = [
     #"{"type":"dahai","actor":2,"pai":"E","tsumogiri":false}"#,
 ]
 
+// MARK: - 振聽劇本
+//
+// 原本五個劇本**一次榮和機會都沒有**，所以 ch861（振聽）與 mask[43]（榮）兩邊
+// 永遠都是 0——「對拍零落差」在振聽這一段等於什麼都沒驗到。
+//
+// 下面六個劇本把 libriichi 的三種振聽各走一遍。共用的聽牌手是
+// `234m 678m 234p 5p5p 6s6s`（斷么、5p/6s 雙碰），榮得了、也碰得到，
+// 所以「不能榮但還能碰」的時點也會產生 ACTION，ch861 才讀得到。
+
+/// 振聽 A：見逃 → 同巡振聽 → 自家摸打後解除
+///
+/// 這是本組的主劇本，四個關鍵時點都會被比對到：
+/// - seat1 打 5p：可榮，此時**還沒**振聽（ch861=0）
+/// - seat2 打 6s：見逃成立，不能榮但能碰（ch861=1，mask 沒有 43）
+/// - 自家摸牌：同巡振聽**還在**（libriichi 不在摸牌時解除）
+/// - 自家打牌之後 seat1 再打 6s：解除，可以榮
+private let furitenMissEvents: [String] = [
+    #"{"type":"start_game","id":0,"names":["A","B","C","D"]}"#,
+    #"{"type":"start_kyoku","bakaze":"E","dora_marker":"E","kyoku":2,"honba":0,"kyotaku":0,"oya":1,"scores":[25000,25000,25000,25000],"tehais":[["2m","3m","4m","6m","7m","8m","2p","3p","4p","5p","5p","6s","6s"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"]]}"#,
+    #"{"type":"tsumo","actor":1,"pai":"?"}"#,
+    #"{"type":"dahai","actor":1,"pai":"5p","tsumogiri":false}"#,
+    #"{"type":"tsumo","actor":2,"pai":"?"}"#,
+    #"{"type":"dahai","actor":2,"pai":"6s","tsumogiri":false}"#,
+    #"{"type":"tsumo","actor":3,"pai":"?"}"#,
+    #"{"type":"dahai","actor":3,"pai":"1m","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":0,"pai":"9m"}"#,
+    #"{"type":"dahai","actor":0,"pai":"9m","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":1,"pai":"?"}"#,
+    #"{"type":"dahai","actor":1,"pai":"6s","tsumogiri":false}"#,
+    #"{"type":"tsumo","actor":2,"pai":"?"}"#,
+    #"{"type":"dahai","actor":2,"pai":"5p","tsumogiri":false}"#,
+]
+
+/// 振聽 B：見逃緊接自家摸牌 —— 延後標記的時序
+///
+/// 上家打出待牌、自己見逃，**下一個事件就是自家摸牌**。
+/// 見逃那一格必須是 0、緊接的摸牌那一格必須是 1，時序錯一格就會被抓到。
+private let furitenMissThenTsumoEvents: [String] = [
+    #"{"type":"start_game","id":0,"names":["A","B","C","D"]}"#,
+    #"{"type":"start_kyoku","bakaze":"E","dora_marker":"E","kyoku":2,"honba":0,"kyotaku":0,"oya":1,"scores":[25000,25000,25000,25000],"tehais":[["2m","3m","4m","6m","7m","8m","2p","3p","4p","5p","5p","6s","6s"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"]]}"#,
+    #"{"type":"tsumo","actor":1,"pai":"?"}"#,
+    #"{"type":"dahai","actor":1,"pai":"9m","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":2,"pai":"?"}"#,
+    #"{"type":"dahai","actor":2,"pai":"9p","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":3,"pai":"?"}"#,
+    #"{"type":"dahai","actor":3,"pai":"5p","tsumogiri":false}"#,
+    #"{"type":"tsumo","actor":0,"pai":"1m"}"#,
+    #"{"type":"dahai","actor":0,"pai":"1m","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":1,"pai":"?"}"#,
+    #"{"type":"dahai","actor":1,"pai":"6s","tsumogiri":false}"#,
+]
+
+/// 振聽 C：立直後見逃 —— 永久振聽
+///
+/// 立直成立後聽牌不會再變，振聽只增不減：自家摸切**不會**把它洗掉。
+/// 最後 seat1 再打 6s 時 libriichi 完全不回 ACTION（立直中除了榮沒別的可做），
+/// 純 Swift 若誤判成可榮就會在「需要動作的判定不一致」被抓出來。
+private let furitenRiichiEvents: [String] = [
+    #"{"type":"start_game","id":0,"names":["A","B","C","D"]}"#,
+    #"{"type":"start_kyoku","bakaze":"E","dora_marker":"E","kyoku":1,"honba":0,"kyotaku":0,"oya":0,"scores":[25000,25000,25000,25000],"tehais":[["2m","3m","4m","6m","7m","8m","2p","3p","4p","5p","5p","6s","6s"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"]]}"#,
+    #"{"type":"tsumo","actor":0,"pai":"1m"}"#,
+    #"{"type":"reach","actor":0}"#,
+    #"{"type":"dahai","actor":0,"pai":"1m","tsumogiri":true}"#,
+    #"{"type":"reach_accepted","actor":0}"#,
+    #"{"type":"tsumo","actor":1,"pai":"?"}"#,
+    #"{"type":"dahai","actor":1,"pai":"5p","tsumogiri":false}"#,
+    #"{"type":"tsumo","actor":2,"pai":"?"}"#,
+    #"{"type":"dahai","actor":2,"pai":"9m","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":3,"pai":"?"}"#,
+    #"{"type":"dahai","actor":3,"pai":"9p","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":0,"pai":"9s"}"#,
+    #"{"type":"dahai","actor":0,"pai":"9s","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":1,"pai":"?"}"#,
+    #"{"type":"dahai","actor":1,"pai":"6s","tsumogiri":false}"#,
+]
+
+/// 振聽 D：捨牌振聽會隨聽牌改變而解除
+///
+/// 一向聽時先打掉 8s，之後才聽上 5s/8s → 捨牌振聽；再改聽 5s 嵌張（5s 沒打過）→ 解除。
+/// 捨牌振聽是**算出來的**，不是黏著的旗標——這一條就是在驗那件事。
+///
+/// 刻意繞開「自摸到自己的待牌」：那會讓 libriichi 走 SP 表的 fallback 分支
+/// （用最小自摸點數當期望值，本劇本的莊家第一巡還會算成天和），
+/// 而純 Swift 那兩格目前留 0。那是單人期望值表的缺口，與振聽無關，
+/// 不該混進這條劇本的驗收裡。
+private let furitenDiscardEvents: [String] = [
+    #"{"type":"start_game","id":0,"names":["A","B","C","D"]}"#,
+    #"{"type":"start_kyoku","bakaze":"E","dora_marker":"E","kyoku":1,"honba":0,"kyotaku":0,"oya":0,"scores":[25000,25000,25000,25000],"tehais":[["2m","3m","4m","6m","7m","8m","2p","3p","4p","5p","5p","8s","E"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"]]}"#,
+    // 一向聽，先把 8s 打掉（此刻還沒聽牌，不構成振聽）
+    #"{"type":"tsumo","actor":0,"pai":"6s"}"#,
+    #"{"type":"dahai","actor":0,"pai":"8s","tsumogiri":false}"#,
+    #"{"type":"tsumo","actor":1,"pai":"?"}"#,
+    #"{"type":"dahai","actor":1,"pai":"9m","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":2,"pai":"?"}"#,
+    #"{"type":"dahai","actor":2,"pai":"9p","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":3,"pai":"?"}"#,
+    #"{"type":"dahai","actor":3,"pai":"N","tsumogiri":true}"#,
+    // 摸 7s 打 E → 聽 5s/8s，8s 已經打過 → 捨牌振聽
+    #"{"type":"tsumo","actor":0,"pai":"7s"}"#,
+    #"{"type":"dahai","actor":0,"pai":"E","tsumogiri":false}"#,
+    // seat1 打 5p：可以碰（手上 5p5p），所以讀得到 ch861＝1
+    #"{"type":"tsumo","actor":1,"pai":"?"}"#,
+    #"{"type":"dahai","actor":1,"pai":"5p","tsumogiri":false}"#,
+    #"{"type":"tsumo","actor":2,"pai":"?"}"#,
+    #"{"type":"dahai","actor":2,"pai":"N","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":3,"pai":"?"}"#,
+    #"{"type":"dahai","actor":3,"pai":"N","tsumogiri":true}"#,
+    // 摸 4s 打 7s → 改聽 5s 嵌張，5s 沒打過 → 捨牌振聽解除
+    #"{"type":"tsumo","actor":0,"pai":"4s"}"#,
+    #"{"type":"dahai","actor":0,"pai":"7s","tsumogiri":false}"#,
+    #"{"type":"tsumo","actor":1,"pai":"?"}"#,
+    #"{"type":"dahai","actor":1,"pai":"5p","tsumogiri":false}"#,
+]
+
+/// 振聽 E：無役聽牌 —— 待牌流過去就**當下**進振聽
+///
+/// `234m 567p 234s 5p5p 9s9s` 聽 5p/8p/9s，榮和沒有任何役（不斷么、不平和、無役牌）。
+/// libriichi 在這種局面：mask[43] 是 0（沒役不能榮），而且 ch861 在待牌流過去的**那一格**
+/// 就變成 1（沒有「要不要榮」的選擇，不需要延後）。同時也驗了榮和的役判定——
+/// 少了它純 Swift 會把無役聽牌當成可榮。
+private let furitenNoYakuEvents: [String] = [
+    #"{"type":"start_game","id":0,"names":["A","B","C","D"]}"#,
+    #"{"type":"start_kyoku","bakaze":"E","dora_marker":"E","kyoku":2,"honba":0,"kyotaku":0,"oya":1,"scores":[25000,25000,25000,25000],"tehais":[["2m","3m","4m","5p","6p","7p","2s","3s","4s","5p","5p","9s","9s"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"]]}"#,
+    #"{"type":"tsumo","actor":1,"pai":"?"}"#,
+    #"{"type":"dahai","actor":1,"pai":"9s","tsumogiri":false}"#,
+    #"{"type":"tsumo","actor":2,"pai":"?"}"#,
+    #"{"type":"dahai","actor":2,"pai":"1m","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":3,"pai":"?"}"#,
+    #"{"type":"dahai","actor":3,"pai":"1p","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":0,"pai":"1s"}"#,
+    #"{"type":"dahai","actor":0,"pai":"1s","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":1,"pai":"?"}"#,
+    #"{"type":"dahai","actor":1,"pai":"5p","tsumogiri":false}"#,
+]
+
+/// 振聽 F：同巡振聽在「碰完再打」之後同樣解除
+///
+/// 解除的觸發點是**自家打牌**，不是自家摸牌，所以副露後的那一張打牌也算。
+/// 打 7s 之後改聽 8s 單騎（7s 不是新的待牌，不會另外造成捨牌振聽），
+/// seat1 打 8s 時應該可以榮（副露斷么）。
+private let furitenMeldEvents: [String] = [
+    #"{"type":"start_game","id":0,"names":["A","B","C","D"]}"#,
+    #"{"type":"start_kyoku","bakaze":"E","dora_marker":"E","kyoku":2,"honba":0,"kyotaku":0,"oya":1,"scores":[25000,25000,25000,25000],"tehais":[["2m","3m","4m","6m","7m","8m","2p","3p","4p","5p","5p","7s","8s"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"]]}"#,
+    #"{"type":"tsumo","actor":1,"pai":"?"}"#,
+    #"{"type":"dahai","actor":1,"pai":"6s","tsumogiri":false}"#,
+    #"{"type":"tsumo","actor":2,"pai":"?"}"#,
+    #"{"type":"dahai","actor":2,"pai":"5p","tsumogiri":false}"#,
+    #"{"type":"pon","actor":0,"target":2,"pai":"5p","consumed":["5p","5p"]}"#,
+    #"{"type":"dahai","actor":0,"pai":"7s","tsumogiri":false}"#,
+    #"{"type":"tsumo","actor":1,"pai":"?"}"#,
+    #"{"type":"dahai","actor":1,"pai":"8s","tsumogiri":false}"#,
+]
+
 /// 對拍劇本清單
 private let parityScenarios: [(label: String, events: [String])] = [
     ("minimal", minimalEvents),
@@ -206,7 +359,22 @@ private let parityScenarios: [(label: String, events: [String])] = [
     ("aka-discard", akaDiscardEvents),
     ("aka-riichi", akaRiichiEvents),
     ("aka-meld", akaMeldEvents),
+    ("furiten-miss", furitenMissEvents),
+    ("furiten-miss-then-tsumo", furitenMissThenTsumoEvents),
+    ("furiten-riichi", furitenRiichiEvents),
+    ("furiten-discard", furitenDiscardEvents),
+    ("furiten-no-yaku", furitenNoYakuEvents),
+    ("furiten-meld", furitenMeldEvents),
 ]
+
+/// 振聽劇本的標籤
+private let furitenScenarioLabels = [
+    "furiten-miss", "furiten-miss-then-tsumo", "furiten-riichi",
+    "furiten-discard", "furiten-no-yaku", "furiten-meld",
+]
+
+/// observation 裡的振聽那一格（`ObsEncoder` 佈局，見 libriichi `obs_repr.rs`）
+private let furitenChannel = 861
 
 /// 一次比對結果
 private struct ParitySnapshot {
@@ -396,6 +564,74 @@ private let knownUnportedChannels: Set<Int> = {
     #expect(akaMaskSeen.contains(35), "劇本沒有走到 mask[35]（紅五筒）")
     #expect(akaMaskSeen.contains(36), "劇本沒有走到 mask[36]（紅五索）")
     #expect(sawAkaOnlyDiscard, "劇本沒有走到「唯一合法打牌是紅五」的局面")
+}
+
+/// 振聽劇本真的把 ch861 推到 1 又推回 0 了嗎
+///
+/// 沒有這一條，前面兩個對拍測試在振聽這一段可能只是「兩邊都是 0」。
+/// 這裡直接對 **libriichi 自己的輸出**斷言：
+/// - ch861 在這些劇本裡出現過 1（有進振聽）也出現過 0（有解除）
+/// - mask[43]（榮）出現過 1（真的走到過榮和機會）也在 ch861=1 時是 0（振聽真的擋住榮）
+///
+/// 另外驗 ch861 確實是純 Swift 這邊 `atFuriten` 唯一影響的那一格，
+/// 免得日後改佈局時這組斷言悄悄改成在驗別的東西。
+@Test func furitenScenariosActuallyExerciseFuritenChannel() {
+    var sawFuritenOn = false
+    var sawFuritenOff = false
+    var sawRonOffered = false
+    var sawRonBlockedByFuriten = false
+
+    for label in furitenScenarioLabels {
+        guard let scenario = parityScenarios.first(where: { $0.label == label }) else {
+            Issue.record("找不到劇本 \(label)")
+            continue
+        }
+        let snapshots = runBoth(scenario.events, label: label)
+        #expect(!snapshots.isEmpty, "\(label) 劇本沒有產生任何需要動作的時點")
+
+        var furitenOnInThisScenario = false
+        for snapshot in snapshots {
+            guard snapshot.oracle.obs.count == ObsEncoder.obsChannels * 34 else { continue }
+            let furiten = snapshot.oracle.obs[furitenChannel * 34] != 0
+            if furiten { sawFuritenOn = true; furitenOnInThisScenario = true } else { sawFuritenOff = true }
+            if snapshot.oracle.mask[PlayerState.ActionIndex.hora] {
+                sawRonOffered = true
+                #expect(!furiten, "[\(snapshot.label)] libriichi 在振聽狀態下仍給了榮和？")
+            } else if furiten && snapshot.oracle.mask[PlayerState.ActionIndex.pass] {
+                // 振聽中、還有別的可做（碰）但沒有榮 —— 正是振聽擋住榮的形狀
+                sawRonBlockedByFuriten = true
+            }
+        }
+        // 每一條劇本都必須真的走進振聽，否則改劇本時很容易悄悄退化成「兩邊都是 0」
+        #expect(furitenOnInThisScenario, "劇本 \(label) 從頭到尾沒有走進振聽（ch861 一直是 0）")
+    }
+
+    #expect(sawFuritenOn, "劇本沒有走到「振聽中」（ch861=1）")
+    #expect(sawFuritenOff, "劇本沒有走到「非振聽」（ch861=0）")
+    #expect(sawRonOffered, "劇本沒有走到任何榮和機會（mask[43]=1）")
+    #expect(sawRonBlockedByFuriten, "劇本沒有走到「振聽擋掉榮和」的局面")
+}
+
+/// `atFuriten` 只該影響 ch861 這一格
+@Test func furitenFlagOnlyAffectsChannel861() {
+    let state = PlayerState(playerId: 0)
+    for json in furitenMissEvents.prefix(4) {
+        guard let data = json.data(using: .utf8),
+              let event = try? JSONDecoder().decode(MJAIEvent.self, from: data) else { continue }
+        _ = state.update(event: event)
+    }
+    let before = ObsEncoder.encode(state: state).0
+    state.atFuriten.toggle()
+    let after = ObsEncoder.encode(state: state).0
+
+    var touched: [Int] = []
+    for ch in 0..<ObsEncoder.obsChannels {
+        for i in 0..<34 where before[ch * 34 + i] != after[ch * 34 + i] {
+            touched.append(ch)
+            break
+        }
+    }
+    #expect(touched == [furitenChannel], "atFuriten 影響的 channel 是 \(touched)，預期只有 \(furitenChannel)")
 }
 
 @Test func shantenAgainstLibRiichiCases() {

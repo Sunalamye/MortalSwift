@@ -151,6 +151,12 @@ public final class PlayerState: @unchecked Sendable {
     public var atIppatsu: Bool = false
     /// 振聽狀態
     public var atFuriten: Bool = false
+    /// 見逃待成立：這一巡放過了一張榮得了的牌，同巡振聽要到**下一個事件**才生效
+    ///
+    /// 對應 libriichi 的 `to_mark_same_cycle_furiten`。分成兩段的理由是
+    /// observation：被問「要不要榮」的那個時點自己還沒振聽，ch861 必須是 0；
+    /// 直到下一個事件（別人摸牌／自己吃碰）才變 1。合成一個旗標會讓那一格提早亮起來。
+    public var pendingSameCycleFuriten: Bool = false
 
     // MARK: - Turn Tracking
 
@@ -235,6 +241,7 @@ public final class PlayerState: @unchecked Sendable {
         atRinshan = false
         atIppatsu = false
         atFuriten = false
+        pendingSameCycleFuriten = false
 
         lastSelfTsumo = nil
         lastKawaTile = nil

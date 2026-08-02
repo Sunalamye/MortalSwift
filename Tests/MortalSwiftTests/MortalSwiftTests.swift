@@ -522,6 +522,133 @@ private func makeState(tehai: [String], playerId: Int = 0) -> PlayerState {
     #expect(state.lastCans.canTsumoAgari, "振聽不得阻擋自摸（振聽只限制榮和）")
 }
 
+// MARK: - 同巡振聽
+
+/// 開一局並指定莊家與手牌（讓別人先打牌）
+private func makeStateWithOya(tehai: [String], oya: Int) -> PlayerState {
+    let state = PlayerState(playerId: 0)
+    let tiles = tehai.compactMap { Tile(mjaiString: $0) }
+    _ = state.update(event: .startKyoku(StartKyokuEvent(
+        bakaze: .east,
+        kyoku: 1, honba: 0, kyotaku: 0, oya: oya,
+        doraMarker: Tile(mjaiString: "1z") ?? Tile.east,
+        scores: [25000, 25000, 25000, 25000],
+        tehais: [tiles, [], [], []])))
+    return state
+}
+
+/// 別家摸一張未知牌後打出指定的牌
+@discardableResult
+private func feedTsumoDahai(_ state: PlayerState, actor: Int, pai: String) -> Bool {
+    _ = state.update(event: .tsumo(TsumoEvent(actor: actor, pai: .unknown)))
+    return state.update(event: .dahai(DahaiEvent(
+        actor: actor, pai: Tile(mjaiString: pai)!, tsumogiri: true)))
+}
+
+/// 見逃 → 同巡內不能榮 → 自家摸打之後恢復
+///
+/// 原本 `updateFuriten()` 只會寫 `true`、局內沒有任何路徑寫回 `false`，
+/// 所以見逃一次之後整局的 `canRon` 都被鎖死（obs ch861 也一路是 1）。
+/// 這條測試釘住三個時點：見逃當下不算振聽、下一張待牌不能榮、自家打牌後恢復。
+@Test func testSameCycleFuritenClearsAfterOwnDiscard() {
+    // 234m 678m 234p + 5p5p + 6s6s：斷么，聽 5p/6s 雙碰
+    let state = makeStateWithOya(
+        tehai: ["2m","3m","4m","6m","7m","8m","2p","3p","4p","5p","5p","6s","6s"],
+        oya: 1)
+    #expect(state.waits[Tile(mjaiString: "5p")!.index], "應聽 5p")
+    #expect(state.waits[Tile(mjaiString: "6s")!.index], "應聽 6s")
+
+    // seat1 打 5p → 可以榮，而且**此刻還不算振聽**
+    _ = feedTsumoDahai(state, actor: 1, pai: "5p")
+    #expect(state.lastCans.canRonAgari, "第一次待牌流過時應該可以榮")
+    #expect(!state.atFuriten, "被問要不要榮的當下還不是振聽（obs ch861 必須是 0）")
+
+    // 見逃：直接讓 seat2 打另一張待牌 6s
+    _ = feedTsumoDahai(state, actor: 2, pai: "6s")
+    #expect(state.atFuriten, "見逃之後成立同巡振聽")
+    #expect(!state.lastCans.canRonAgari, "同巡振聽期間不能榮")
+    #expect(state.lastCans.canPon, "同巡振聽不影響碰")
+
+    // 自家摸牌 —— libriichi 在摸牌時**不**解除
+    _ = feedTsumoDahai(state, actor: 3, pai: "1m")
+    _ = state.update(event: .tsumo(TsumoEvent(actor: 0, pai: Tile(mjaiString: "9m")!)))
+    #expect(state.atFuriten, "自家摸牌還不解除，要打出去才解除")
+
+    // 自家打牌 → 同巡振聽解除
+    _ = state.update(event: .dahai(DahaiEvent(
+        actor: 0, pai: Tile(mjaiString: "9m")!, tsumogiri: true)))
+    #expect(!state.atFuriten, "自家打牌之後同巡振聽解除")
+
+    // 下一巡再流一張待牌 → 可以榮
+    _ = feedTsumoDahai(state, actor: 1, pai: "6s")
+    #expect(state.lastCans.canRonAgari, "解除之後應該恢復可榮")
+}
+
+/// 立直後的見逃是永久振聽：自家摸切不會把它洗掉
+@Test func testRiichiFuritenIsPermanent() {
+    let state = makeStateWithOya(
+        tehai: ["2m","3m","4m","6m","7m","8m","2p","3p","4p","5p","5p","6s","6s"],
+        oya: 0)
+    _ = state.update(event: .tsumo(TsumoEvent(actor: 0, pai: Tile(mjaiString: "1m")!)))
+    _ = state.update(event: .reach(ReachEvent(actor: 0)))
+    _ = state.update(event: .dahai(DahaiEvent(
+        actor: 0, pai: Tile(mjaiString: "1m")!, tsumogiri: true)))
+    _ = state.update(event: .reachAccepted(ReachAcceptedEvent(actor: 0)))
+
+    // seat1 打 5p → 可榮（立直本身是役），見逃
+    _ = feedTsumoDahai(state, actor: 1, pai: "5p")
+    #expect(state.lastCans.canRonAgari, "立直中待牌流過應可榮")
+
+    _ = feedTsumoDahai(state, actor: 2, pai: "9m")
+    #expect(state.atFuriten, "見逃成立振聽")
+
+    // 自家摸切
+    _ = state.update(event: .tsumo(TsumoEvent(actor: 0, pai: Tile(mjaiString: "9s")!)))
+    _ = state.update(event: .dahai(DahaiEvent(
+        actor: 0, pai: Tile(mjaiString: "9s")!, tsumogiri: true)))
+    #expect(state.atFuriten, "立直振聽是永久的，摸切不解除")
+
+    _ = feedTsumoDahai(state, actor: 1, pai: "6s")
+    #expect(!state.lastCans.canRonAgari, "立直振聽期間永遠不能榮")
+}
+
+/// 無役聽牌：待牌流過去就當下振聽，而且本來就不能榮
+@Test func testNoYakuTenpaiCannotRonAndBecomesFuritenImmediately() {
+    // 234m 567p 234s + 5p5p + 9s9s：聽 5p/8p/9s，榮和沒有任何役
+    let state = makeStateWithOya(
+        tehai: ["2m","3m","4m","5p","6p","7p","2s","3s","4s","5p","5p","9s","9s"],
+        oya: 1)
+    #expect(!state.atFuriten, "還沒有待牌流過去，不該預先算成振聽")
+
+    _ = feedTsumoDahai(state, actor: 1, pai: "9s")
+    #expect(!state.lastCans.canRonAgari, "門前本身不是役，無役聽牌不能榮")
+    #expect(state.atFuriten, "沒有選擇可言，待牌流過的當下就進振聽")
+}
+
+/// 捨牌振聽會隨聽牌改變而重算（不是黏著的旗標）
+@Test func testDiscardFuritenClearsWhenWaitsChange() {
+    // 234m 678m 234p 5p5p + 7s8s：聽 6s/9s
+    let state = makeStateWithOya(
+        tehai: ["2m","3m","4m","6m","7m","8m","2p","3p","4p","5p","5p","7s","8s"],
+        oya: 0)
+    // 摸到待牌 6s 卻打掉 → 捨牌振聽
+    _ = state.update(event: .tsumo(TsumoEvent(actor: 0, pai: Tile(mjaiString: "6s")!)))
+    _ = state.update(event: .dahai(DahaiEvent(
+        actor: 0, pai: Tile(mjaiString: "6s")!, tsumogiri: true)))
+    #expect(state.atFuriten, "打掉自己的待牌 → 捨牌振聽")
+
+    _ = feedTsumoDahai(state, actor: 1, pai: "1m")
+    _ = feedTsumoDahai(state, actor: 2, pai: "1p")
+    _ = feedTsumoDahai(state, actor: 3, pai: "1s")
+
+    // 摸 5p 打 8s → 改聽 5p 單騎，5p 沒打過 → 解除
+    _ = state.update(event: .tsumo(TsumoEvent(actor: 0, pai: Tile(mjaiString: "5p")!)))
+    _ = state.update(event: .dahai(DahaiEvent(
+        actor: 0, pai: Tile(mjaiString: "8s")!, tsumogiri: false)))
+    #expect(state.waits[Tile(mjaiString: "7s")!.index], "改聽 7s 單騎")
+    #expect(!state.atFuriten, "新的待牌都沒打過 → 捨牌振聽解除")
+}
+
 @Test func testDaiminkanUpdatesTehaiLenDiv3() {
     let state = makeState(tehai: ["1m","1m","1m","2m","3m","4m","5m","6m","7m",
                                   "8m","9m","1p","1p"])
