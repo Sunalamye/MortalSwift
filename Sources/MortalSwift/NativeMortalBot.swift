@@ -141,23 +141,27 @@ public actor NativeMortalBot {
 
     // MARK: - Public API (Typed)
 
+    /// 吃下事件、更新狀態，並在需要動作時交出張量
+    ///
+    /// `react` / `reactSync` 的差別只有「怎麼呼叫模型」那一行，前置（更新狀態、
+    /// 編碼、記住遮罩）與後置（解碼）兩端相同，抄兩份只會讓兩條路慢慢走味。
+    ///
+    /// - Returns: 需要動作時回 (obs, mask)；不需要動作時 nil
+    private func beginReaction(event: MJAIEvent) -> (obs: [Float], mask: [UInt8])? {
+        guard state.update(event: event) else { return nil }
+
+        let encoded = currentEncoding()
+        lastMask = encoded.mask
+        return encoded
+    }
+
     /// 處理 MJAI 事件並取得 Bot 反應 (非同步)
     /// - Parameter event: MJAI 事件
     /// - Returns: Bot 動作，如果不需要動作則返回 nil
     public func react(event: MJAIEvent) async throws -> MJAIAction? {
-        // 更新狀態
-        let needsAction = state.update(event: event)
+        guard let (obs, mask) = beginReaction(event: event) else { return nil }
 
-        guard needsAction else { return nil }
-
-        // 編碼觀測
-        let (obs, mask) = currentEncoding()
-        lastMask = mask
-
-        // 選擇動作
         let actionIdx = try await selectAction(obs: obs, mask: mask)
-
-        // 解碼動作
         return ActionDecoder.decode(actionIdx: actionIdx, state: state)
     }
 
@@ -165,19 +169,9 @@ public actor NativeMortalBot {
     /// - Parameter event: MJAI 事件
     /// - Returns: Bot 動作，如果不需要動作則返回 nil
     public func reactSync(event: MJAIEvent) throws -> MJAIAction? {
-        // 更新狀態
-        let needsAction = state.update(event: event)
+        guard let (obs, mask) = beginReaction(event: event) else { return nil }
 
-        guard needsAction else { return nil }
-
-        // 編碼觀測
-        let (obs, mask) = currentEncoding()
-        lastMask = mask
-
-        // 選擇動作
         let actionIdx = try selectActionSync(obs: obs, mask: mask)
-
-        // 解碼動作
         return ActionDecoder.decode(actionIdx: actionIdx, state: state)
     }
 
@@ -273,9 +267,21 @@ public actor NativeMortalBot {
 
     // MARK: - Private Methods
 
-    /// 選擇動作 (非同步)
-    private func selectAction(obs: [Float], mask: [UInt8]) async throws -> Int {
-        // 找出有效動作
+    /// 選一個動作要走的路
+    ///
+    /// async 與 sync 兩條選擇路徑，**只有中間那一步「怎麼呼叫模型」不同**：
+    /// 前面的「找合法動作／無模型時退回」與後面的「取 argmax、算 softmax、
+    /// 記住 last*」兩邊逐行相同。原本是整段抄兩份，代價不是行數而是漂移——
+    /// 之前只改一邊（例如 fallback 條件）不會有任何測試失敗來提醒。
+    private enum SelectionPlan {
+        /// 沒有模型，退回策略已經把動作決定好了
+        case decided(Int)
+        /// 要送進模型，附上合法動作清單
+        case needsInference(model: MLModel, validActions: [Int])
+    }
+
+    /// 推論前：合法動作 + 無模型時的退回
+    private func planSelection(mask: [UInt8]) throws -> SelectionPlan {
         let validActions = mask.enumerated().compactMap { idx, valid in
             valid != 0 ? idx : nil
         }
@@ -284,53 +290,45 @@ public actor NativeMortalBot {
             throw MortalError.noValidActions
         }
 
-        // 如果沒有模型，使用簡單策略
         guard let model = coreMLModel else {
-            return selectFallbackAction(validActions: validActions)
+            return .decided(selectFallbackAction(validActions: validActions))
         }
 
-        // 執行推理
-        let qValues = try await runInference(model: model, obs: obs, mask: mask)
+        return .needsInference(model: model, validActions: validActions)
+    }
+
+    /// 推論後：取最佳動作、算 softmax，並更新對外可讀的 last* 欄位
+    private func finishSelection(qValues: [Float], validActions: [Int]) -> Int {
         lastQValues = qValues
 
-        // 選擇最佳動作
         let bestAction = selectBestAction(qValues: qValues, validActions: validActions)
         lastSelectedAction = bestAction
 
-        // 計算 softmax 機率
         lastProbs = calculateSoftmax(qValues: qValues, validActions: validActions)
 
         return bestAction
     }
 
+    /// 選擇動作 (非同步)
+    private func selectAction(obs: [Float], mask: [UInt8]) async throws -> Int {
+        switch try planSelection(mask: mask) {
+        case .decided(let action):
+            return action
+        case .needsInference(let model, let validActions):
+            let qValues = try await runInference(model: model, obs: obs, mask: mask)
+            return finishSelection(qValues: qValues, validActions: validActions)
+        }
+    }
+
     /// 選擇動作 (同步)
     private func selectActionSync(obs: [Float], mask: [UInt8]) throws -> Int {
-        // 找出有效動作
-        let validActions = mask.enumerated().compactMap { idx, valid in
-            valid != 0 ? idx : nil
+        switch try planSelection(mask: mask) {
+        case .decided(let action):
+            return action
+        case .needsInference(let model, let validActions):
+            let qValues = try runInferenceSync(model: model, obs: obs, mask: mask)
+            return finishSelection(qValues: qValues, validActions: validActions)
         }
-
-        guard !validActions.isEmpty else {
-            throw MortalError.noValidActions
-        }
-
-        // 如果沒有模型，使用簡單策略
-        guard let model = coreMLModel else {
-            return selectFallbackAction(validActions: validActions)
-        }
-
-        // 執行推理
-        let qValues = try runInferenceSync(model: model, obs: obs, mask: mask)
-        lastQValues = qValues
-
-        // 選擇最佳動作
-        let bestAction = selectBestAction(qValues: qValues, validActions: validActions)
-        lastSelectedAction = bestAction
-
-        // 計算 softmax 機率
-        lastProbs = calculateSoftmax(qValues: qValues, validActions: validActions)
-
-        return bestAction
     }
 
     /// 執行 Core ML 推理 (非同步)

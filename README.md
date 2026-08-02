@@ -92,8 +92,8 @@ let json = try await bot.react(mjaiEvent: #"{"type":"tsumo","actor":0,"pai":"5m"
 
 ```
 Sources/MortalSwift/
-├── MortalBot.swift           對外介面（actor）
-├── NativeMortalBot.swift     Core ML 推論
+├── MortalSwift.swift         版本號與 `MortalBot` 相容別名
+├── NativeMortalBot.swift     對外介面（actor）＋ Core ML 推論
 ├── Models/
 │   ├── Tile.swift            牌的表示與轉換
 │   ├── MJAIEvent.swift       輸入事件

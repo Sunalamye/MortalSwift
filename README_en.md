@@ -95,8 +95,8 @@ let json = try await bot.react(mjaiEvent: #"{"type":"tsumo","actor":0,"pai":"5m"
 
 ```
 Sources/MortalSwift/
-├── MortalBot.swift           Public interface (actor)
-├── NativeMortalBot.swift     Core ML inference
+├── MortalSwift.swift         Version string + `MortalBot` compatibility alias
+├── NativeMortalBot.swift     Public interface (actor) + Core ML inference
 ├── Models/
 │   ├── Tile.swift            Tile representation
 │   ├── MJAIEvent.swift       Input events

@@ -184,7 +184,7 @@ public struct ObsEncoder {
         ctx.idx += 1
 
         // ── 各家持有的寶牌數 / 未見寶牌數 ─────────────────────────────
-        let dorasOwned = computeDorasOwned(state: state)
+        let dorasOwned = state.computeDorasOwned()
         for count in dorasOwned {
             ctx.encodeInteger(count, cap: 12, rescale: true)
         }
@@ -559,39 +559,11 @@ public struct ObsEncoder {
 
     // MARK: - Dora Accounting
 
-    /// 各家持有的寶牌數（含紅五）
-    ///
-    /// libriichi 是逐張增量維護的；這裡改成從既有狀態推導，結果相同但不需要
-    /// 在每個事件處理器裡都記得加減。
-    private static func computeDorasOwned(state: PlayerState) -> [Int] {
-        var owned = [Int](repeating: 0, count: 4)
-
-        // 自家手牌
-        for tid in 0..<34 {
-            owned[0] += state.tehai[tid] * state.doraFactor[tid]
-        }
-        owned[0] += state.akasInHand.filter { $0 }.count
-
-        // 各家副露
-        for seat in 0..<4 {
-            for meld in state.fuuroOverview[seat] {
-                for tile in meld {
-                    let tid = tile.deaka.index
-                    if tid >= 0 { owned[seat] += state.doraFactor[tid] }
-                    if tile.isRed { owned[seat] += 1 }
-                }
-            }
-            // 暗槓是同一張牌 4 枚
-            for ankan in state.ankanOverview[seat] {
-                if let tile = ankan.first {
-                    let tid = tile.deaka.index
-                    if tid >= 0 { owned[seat] += 4 * state.doraFactor[tid] }
-                }
-            }
-        }
-
-        return owned
-    }
+    // 「各家持有的寶牌數」只有一份實作：`PlayerState.computeDorasOwned()`
+    //（見 SinglePlayerTables.swift）。這裡原本有一份逐行相同的私有複本，
+    // 兩邊都是 observation 與單人期望值推演的輸入——同一個數字算兩次，
+    // 只要有一邊被改（例如補上加槓的第 4 張），obs 與 SP 表就會對不起來，
+    // 而且不會有任何測試失敗來提醒。
 
     /// 已見的寶牌數（含紅五）
     private static func computeDorasSeen(state: PlayerState) -> Int {

@@ -134,8 +134,6 @@ extension PlayerState {
 
         intermediateKan = []
         intermediateChiPon = nil
-        dorasOwned = [0, 0, 0, 0]
-        dorasSeen = 0
 
         lastCans = ActionCandidate()
         ankanCandidates = []
@@ -144,15 +142,12 @@ extension PlayerState {
         ponCandidates = []
 
         canWRiichi = true
-        isWRiichi = false
         atRinshan = false
-        atIppatsu = false
         atFuriten = false
         pendingSameCycleFuriten = false
 
         lastSelfTsumo = nil
         lastKawaTile = nil
-        kansOnBoard = 0
 
         isMenzen = true
         tehaiLenDiv3 = 4
@@ -199,9 +194,6 @@ extension PlayerState {
         // 計算向聽。配牌是 3n+1，此時才算得了等待
         updateShanten()
         updateWaits()
-
-        // 檢查 All Last
-        checkAllLast()
     }
 
     private func handleTsumo(_ event: TsumoEvent) -> Bool {
@@ -209,12 +201,11 @@ extension PlayerState {
         atTurn = relActor
         tilesLeft -= 1
 
-        // 取消所有人的一發
-        for i in 0..<4 {
-            if riichiAccepted[i] {
-                atIppatsu = false
-            }
-        }
+        // 這裡原本有一段「取消所有人的一發」：掃四家、只要有人立直成立就把
+        // `atIppatsu` 設成 false。那個旗標只在自己立直成立時被設為 true，
+        // 而自己立直成立必然讓 `riichiAccepted[0]` 為真，所以下一個 tsumo 事件
+        // 一定會把它關掉——一發旗標永遠活不過一巡，也沒有任何讀取端
+        //（observation 沒有一發那一格）。整組刪掉，不留半套實作。
 
         if relActor == 0 {
             // 自己摸牌
@@ -295,6 +286,18 @@ extension PlayerState {
             // W 立直失效
             canWRiichi = false
 
+            // 嶺上到此為止。
+            //
+            // `atRinshan` 是槓完補牌那一手的旗標，`calculateTsumoActions` 拿它當
+            // 「嶺上開花保底有役」的判準。原本整局只有開局會設 false，槓過一次之後
+            // 就永遠是 true——之後每一次自摸都會被當成嶺上，副露無役手也會被判成
+            // 可以自摸和，送出去會被伺服器打回來。
+            //
+            // 清在這裡而不是下一次摸牌前：嶺上的作用範圍就是「槓 → 補牌 → 打出那一張」，
+            // 打完就跨出去了。自家打牌是這個範圍唯一的出口（槓完必定要打牌），
+            // 所以這一行就等於「至下一次槓之前不再是嶺上」。
+            atRinshan = false
+
             // 更新向聽
             updateShanten()
             updateWaits()
@@ -328,11 +331,6 @@ extension PlayerState {
         // 原本只在開局算一次，立直付出的 1000 點不會反映到 rank 那 4 格；
         // 四家同分時自己立直就會從「暫定第一」掉到最後，obs 卻還停在第一。
         updateRank()
-
-        // 開啟一發
-        if relActor == 0 {
-            atIppatsu = true
-        }
     }
 
     private func handleChi(_ event: ChiEvent) {
@@ -455,8 +453,6 @@ extension PlayerState {
         if relActor != 0 { for tile in event.consumed { markTileSeen(tile) } }
         padKawaForPonOrDaiminkan(absActor: event.actor, absTarget: event.target)
 
-        kansOnBoard += 1
-
         if relActor == 0 {
             // 自己大明槓
             removeTile(event.consumed[0])
@@ -487,8 +483,6 @@ extension PlayerState {
         // 副露亮出來的牌，對別人來說是新資訊；**自己的**那幾張在配牌／摸牌時
         // 就已經算過「已見」，再算一次會重覆計數（ch835 tiles_seen 會多算）。
         if relActor != 0 { for tile in event.consumed { markTileSeen(tile) } }
-
-        kansOnBoard += 1
 
         if relActor == 0 {
             // 自己暗槓
@@ -534,8 +528,6 @@ extension PlayerState {
             // 嶺上狀態
             atRinshan = true
         }
-
-        kansOnBoard += 1
     }
 
     private func handleDora(_ event: DoraEvent) {
@@ -858,10 +850,12 @@ extension PlayerState {
         }
     }
 
-    private func checkAllLast() {
-        // 南4局或以上
-        isAllLast = (bakaze == .south && kyoku >= 3)
-    }
+    // 這裡原本有一個 `checkAllLast()`，把 `bakaze == .south && kyoku >= 3` 寫進
+    // `isAllLast` 欄位。兩個問題疊在一起：欄位沒有任何讀取端（observation 的局數
+    // 是另外從 `kyoku` 直接編的），而且判定本身是錯的——這份實作的 `kyoku` 是
+    // 1-based（見 ObsEncoder 的 `state.kyoku - 1`），南場 All Last 是 kyoku == 4，
+    // `>= 3` 會把南3也算進去。與其留一個沒人讀又會誤導後人的錯值，不如整組刪掉；
+    // 真的需要 All Last 時請從 `bakaze` / `kyoku` 現算，並記得 kyoku 是 1-based。
 
     /// 自家打牌後重算振聽
     ///

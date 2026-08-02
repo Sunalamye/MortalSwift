@@ -26,9 +26,6 @@ let package = Package(
             name: "MortalSwift",
             dependencies: [],
             path: "Sources/MortalSwift",
-            exclude: [
-                "MortalBot.swift"  // 排除舊的 FFI 版本
-            ],
             resources: [
                 .copy("Resources/mortal.mlmodelc"),
                 // 向聽查表（見 ShantenTable.swift）

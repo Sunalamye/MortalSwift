@@ -62,8 +62,6 @@ public final class PlayerState: @unchecked Sendable {
     public var rank: Int = 1
     /// 莊家座位 (相對)
     public var oya: Int = 0
-    /// 是否為 All Last
-    public var isAllLast: Bool = false
 
     // MARK: - Hand Management
 
@@ -145,10 +143,12 @@ public final class PlayerState: @unchecked Sendable {
 
     /// 寶牌指示牌
     public var doraIndicators: [Tile] = []
-    /// 持有的寶牌數 (各類)
-    public var dorasOwned: [Int] = [0, 0, 0, 0]
-    /// 已見的寶牌數
-    public var dorasSeen: Int = 0
+
+    // 「各家持有的寶牌數」與「已見寶牌數」曾經是這裡的兩個欄位，但只有被歸零、
+    // 從來沒有被累加，也沒有任何人讀——真正在用的是從 `tehai` / `fuuroOverview` /
+    // `tilesSeen` 現算的 `computeDorasOwned()`（SinglePlayerTables.swift）與
+    // `ObsEncoder.computeDorasSeen`。留著永遠是 0 的欄位比沒有更糟：
+    // 它看起來像是可以拿來讀的狀態。
 
     // MARK: - Action State
 
@@ -165,14 +165,13 @@ public final class PlayerState: @unchecked Sendable {
 
     // MARK: - Special Conditions
 
-    /// 可以 W 立直
+    /// 可以 W 立直（第一巡且尚未有人副露）
     public var canWRiichi: Bool = false
-    /// 是 W 立直
-    public var isWRiichi: Bool = false
-    /// 在嶺上
+    /// 在嶺上：槓完補牌的那一手，摸到的牌能和就是嶺上開花
+    ///
+    /// 只在自家槓之後為真，並在**自家打牌時清掉**（見 `handleDahai`）——
+    /// 嶺上的作用範圍就是槓後那一次摸牌與打牌，跨過去就不再是嶺上。
     public var atRinshan: Bool = false
-    /// 一發狀態
-    public var atIppatsu: Bool = false
     /// 振聽狀態
     public var atFuriten: Bool = false
     /// 見逃待成立：這一巡放過了一張榮得了的牌，同巡振聽要到**下一個事件**才生效
@@ -188,8 +187,6 @@ public final class PlayerState: @unchecked Sendable {
     public var lastSelfTsumo: Tile? = nil
     /// 最後河底牌
     public var lastKawaTile: Tile? = nil
-    /// 場上的槓數
-    public var kansOnBoard: Int = 0
 
     // MARK: - Intermediate State
 
@@ -219,7 +216,6 @@ public final class PlayerState: @unchecked Sendable {
         scores = [25000, 25000, 25000, 25000]
         rank = 1
         oya = 0
-        isAllLast = false
 
         tehai = [Int](repeating: 0, count: 34)
         akasInHand = [false, false, false]
@@ -251,8 +247,6 @@ public final class PlayerState: @unchecked Sendable {
         discardedTiles = [Bool](repeating: false, count: 34)
 
         doraIndicators = []
-        dorasOwned = [0, 0, 0, 0]
-        dorasSeen = 0
 
         lastCans = ActionCandidate()
         ankanCandidates = []
@@ -261,15 +255,12 @@ public final class PlayerState: @unchecked Sendable {
         ponCandidates = []
 
         canWRiichi = false
-        isWRiichi = false
         atRinshan = false
-        atIppatsu = false
         atFuriten = false
         pendingSameCycleFuriten = false
 
         lastSelfTsumo = nil
         lastKawaTile = nil
-        kansOnBoard = 0
 
         intermediateKan = []
         intermediateChiPon = nil
@@ -364,18 +355,9 @@ public final class PlayerState: @unchecked Sendable {
         }
     }
 
-    /// 計算持有的寶牌數
-    public func countOwnedDoras() -> Int {
-        var count = 0
-        for idx in 0..<34 {
-            count += tehai[idx] * doraFactor[idx]
-        }
-        // 紅寶牌
-        if akasInHand[0] { count += 1 }
-        if akasInHand[1] { count += 1 }
-        if akasInHand[2] { count += 1 }
-        return count
-    }
+    // 自家寶牌數請用 `computeDorasOwned()[0]`（SinglePlayerTables.swift）。
+    // 這裡原本另有一份 `countOwnedDoras()`，算的是同一個數字的子集（只算手牌），
+    // 沒有任何呼叫端，卻是第三份會各自漂移的寶牌計數。
 
     // MARK: - Shanten Calculation
 

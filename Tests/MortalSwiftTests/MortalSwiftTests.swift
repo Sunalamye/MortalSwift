@@ -691,6 +691,51 @@ private func feedTsumoDahai(_ state: PlayerState, actor: Int, pai: String) -> Bo
             "碰後向聽必須是重算過的值")
 }
 
+// MARK: - 嶺上狀態的生命週期
+
+/// 槓之後的嶺上狀態要在自家打牌時結束
+///
+/// `atRinshan` 原本只有在開局被設為 false，之後每個槓的 handler 都只寫 true——
+/// 一局裡只要槓過一次，它就一路 true 到局末。它不是裝飾用的旗標：
+/// `calculateTsumoActions` 拿它當「嶺上開花保底有役」的判準
+/// （`isMenzen || riichiAccepted[0] || tilesLeft == 0 || atRinshan || canWRiichi`），
+/// 卡在 true 等於宣告「這一局之後每一次自摸都是嶺上開花」，
+/// 副露無役手會被判成可以自摸和，送出去會被伺服器打回來。
+///
+/// 這條劇本釘住兩件事：打牌後旗標熄滅，以及熄滅之後無役手真的不能自摸。
+@Test func testRinshanClearsAfterOwnDiscard() {
+    // 111m 234m 678m 234p + 5p：大明槓 1m 之後是 5p 單騎聽
+    let state = makeState(tehai: ["1m","1m","1m","2m","3m","4m","6m","7m","8m",
+                                  "2p","3p","4p","5p"])
+
+    _ = state.update(event: .daiminkan(DaiminkanEvent(
+        actor: 0, target: 2,
+        pai: Tile(mjaiString: "1m")!,
+        consumed: [Tile(mjaiString: "1m")!, Tile(mjaiString: "1m")!,
+                   Tile(mjaiString: "1m")!])))
+    #expect(state.atRinshan, "自家槓完就是嶺上")
+    #expect(!state.isMenzen, "大明槓破門前")
+
+    // 嶺上牌摸進來又打掉：嶺上的作用範圍到這裡為止
+    _ = state.update(event: .tsumo(TsumoEvent(actor: 0, pai: Tile(mjaiString: "9s")!)))
+    _ = state.update(event: .dahai(DahaiEvent(
+        actor: 0, pai: Tile(mjaiString: "9s")!, tsumogiri: true)))
+    #expect(!state.atRinshan, "自家打牌後不再是嶺上")
+    #expect(state.waits[Tile(mjaiString: "5p")!.index], "應聽 5p 單騎")
+
+    // 繞一圈回到自己（打字牌，不會碰到自己的聽牌或副露機會）
+    for actor in 1...3 {
+        feedTsumoDahai(state, actor: actor, pai: "C")
+    }
+    #expect(!state.atRinshan, "別家摸打不會讓嶺上復活")
+
+    // 摸到 5p 是和了形，但這手是「1m 明槓 + 234m + 678m + 234p + 55p」：
+    // 有 1m 所以不是斷么、只有兩色 234 所以不是三色、副露所以沒有門前清自摸和——無役。
+    _ = state.update(event: .tsumo(TsumoEvent(actor: 0, pai: Tile(mjaiString: "5p")!)))
+    #expect(!state.lastCans.canTsumoAgari,
+            "嶺上已經結束，副露無役手不得自摸和")
+}
+
 // MARK: - 三麻拔北
 
 /// 拔北之後向聽與等待要跟著手牌走
