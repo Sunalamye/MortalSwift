@@ -17,6 +17,8 @@ public enum MortalError: Error, LocalizedError {
     case inferenceOutputMissing
     case modelNotLoaded
     case invalidTile(String)
+    /// Core ML 輸入緩衝區的元素數與待搬入的資料不符
+    case inferenceInputShapeMismatch(expected: Int, got: Int)
 
     public var errorDescription: String? {
         switch self {
@@ -36,6 +38,8 @@ public enum MortalError: Error, LocalizedError {
             return "Core ML model is not loaded."
         case .invalidTile(let tile):
             return "Invalid tile: \(tile)"
+        case .inferenceInputShapeMismatch(let expected, let got):
+            return "Core ML input buffer expects \(expected) elements, got \(got)."
         }
     }
 }

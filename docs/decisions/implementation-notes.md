@@ -139,6 +139,58 @@ ryanpeikou / ipeikou 旗標）。
 （`xcodebuild build` 不加 `-configuration Release`），
 所以使用者實際體驗到的是 1.2 秒那一版。要拿到 36.7 ms 需要用 Release 建置。
 
+---
+
+## D5. observation 快取以狀態版本號為準
+
+`getObservation()` / `getMask()` / `getCandidateActions()` 原本各自呼叫一次
+`ObsEncoder.encode`。Naki 的 `updateAvailableActions()` 一次 UI 更新會連著問
+遮罩、問候選、再問一次遮罩——同一個狀態被完整編碼三次，包含最貴的單人期望值 DP。
+Debug 下那是三個 1.2 秒疊起來。
+
+**問題不是 encode 太慢，是同一份計算被重跑。** 所以做的是快取，不是再優化演算法。
+
+失效判準用 `PlayerState.revision`：`update(event:)` 每處理一個事件就 +1。
+不比對狀態內容的理由很簡單——比對 1012×34 的來源狀態比重算還貴。
+這個判準成立的前提是「狀態只由事件改」，而 `NativeMortalBot` 是 `state` 的唯一
+持有者且不對外交出參考，`ActionDecoder.decode` 只讀不寫。
+
+⚠️ 繞過 `update(event:)` 直接寫欄位（測試裡有這種用法）**不會**讓版本前進。
+那種情況請直接呼叫 `ObsEncoder.encode`（它不看快取）或先 `bumpRevision()`。
+
+快取只涵蓋 `atKanSelect == false`；次級決策的張量不同，而且沒有呼叫端會連問。
+
+驗收：`encodeIsCachedWithinOneStateRevision`（連問四次只算一次、下一個事件會失效）
+與 `cachedEncodingMatchesFreshEncode`（快取的張量與當場重算逐格相同）。
+**快取可以省時間，不可以改數值**——後者是硬條件。
+
+---
+
+## D6. Core ML 輸入改 memcpy
+
+`obsArray[i] = NSNumber(value: obs[i])` 對 1012×34 = 34,408 個 float 各配一個
+NSNumber。那是純搬運成本，跟數值無關。輸入是自己用
+`MLMultiArray(shape:dataType: .float32)` 配出來的連續緩衝區，整塊 memcpy 進
+`dataPointer` 結果位元相同。
+
+`copyFloats` 是 internal 而非 private，因為「搬進去的每一格都一樣」要能被直接驗
+（`memcpyIntoMLMultiArrayIsFaithful`），不能只靠「模型看起來還會給合理答案」推論。
+guard 擋 dataType 與長度不符：那種情況要丟錯，不能默默搬一半。
+
+---
+
+## D7. 延遲門檻與 `precondition`
+
+**只印數字不設門檻的量測擋不住任何回歸**——效能掉三倍測試照樣綠。
+`encodeLatency` / `encodeLatencyWorstCase` 現在超標會 `#expect` 失敗，
+門檻依 `#if DEBUG` 分兩組（見測試檔的 `LatencyBudget`）。
+慢機器可用 `MORTALSWIFT_LATENCY_BUDGET_SCALE` 整體放寬，預設 1.0 不放水。
+
+`ObsEncoder.encode` 結尾的 channel 數檢查從 `assert` 改成 `precondition`：
+`assert` 在 Release 被整個編掉，而這一格正是 Release 更需要的——channel 數對不上
+代表整份張量語意推移，模型會照著看不懂的輸入給出看似正常的機率，只會表現成
+「bot 變弱了」，不會自己浮出來。
+
 ## 未解問題
 
-（目前無）
+- **Naki 的發佈流程是否已改用 Release 建置**：屬於 Naki repo，這裡沒有動，也沒有驗證。

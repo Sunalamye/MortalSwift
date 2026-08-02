@@ -47,6 +47,12 @@ public actor NativeMortalBot {
     /// 最後的遮罩
     private var lastMask: [UInt8] = []
 
+    /// observation 快取：對同一個狀態版本只算一次 encode
+    private var cachedEncoding: (revision: Int, obs: [Float], mask: [UInt8])?
+
+    /// 真正跑過幾次完整 encode（快取命中不計）
+    private var encodeCount = 0
+
     /// 是否有載入模型
     public var hasModel: Bool {
         coreMLModel != nil
@@ -100,6 +106,39 @@ public actor NativeMortalBot {
         }
     }
 
+    // MARK: - Observation Cache
+
+    /// 取得當前狀態的 (obs, mask)；同一個狀態版本只真的算一次
+    ///
+    /// 為什麼要快取：`getObservation` / `getMask` / `getCandidateActions` 原本各自
+    /// 呼叫一次 `ObsEncoder.encode`，而 encode 裡的單人期望值 DP 是整條路徑最貴的
+    /// 一段（Debug 最壞情況 1.2–1.5 秒）。呼叫端一次 UI 更新會連著問遮罩、問候選、
+    /// 再問一次遮罩，等於把同一份計算重跑三次——延遲是純粹浪費的，因為狀態根本沒動。
+    ///
+    /// 失效判準是 `state.revision`，只有 `PlayerState.update(event:)` 會推進它。
+    /// 這個 actor 是 `state` 的唯一持有者且不對外交出參考，所以「沒有新事件 ⇒ 狀態
+    /// 沒變 ⇒ 張量沒變」在這裡成立。
+    ///
+    /// 快取只涵蓋 `atKanSelect == false`。次級決策（選槓哪張）的張量不同，
+    /// 而且目前沒有呼叫端會連問，多存一份反而是多一個會走味的狀態。
+    private func currentEncoding() -> (obs: [Float], mask: [UInt8]) {
+        if let cached = cachedEncoding, cached.revision == state.revision {
+            return (cached.obs, cached.mask)
+        }
+        let encoded = ObsEncoder.encode(state: state)
+        encodeCount += 1
+        cachedEncoding = (revision: state.revision, obs: encoded.obs, mask: encoded.mask)
+        return encoded
+    }
+
+    /// 至今真正跑過幾次完整 encode（快取命中不計）
+    ///
+    /// 對外公開是為了讓測試能證明「同一個狀態連問遮罩與候選動作只算一次」——
+    /// 這種效能性質沒有計數器就只能靠碼錶量，量出來的數字又會隨機器浮動。
+    public func getEncodeCount() -> Int {
+        encodeCount
+    }
+
     // MARK: - Public API (Typed)
 
     /// 處理 MJAI 事件並取得 Bot 反應 (非同步)
@@ -112,7 +151,7 @@ public actor NativeMortalBot {
         guard needsAction else { return nil }
 
         // 編碼觀測
-        let (obs, mask) = ObsEncoder.encode(state: state)
+        let (obs, mask) = currentEncoding()
         lastMask = mask
 
         // 選擇動作
@@ -132,7 +171,7 @@ public actor NativeMortalBot {
         guard needsAction else { return nil }
 
         // 編碼觀測
-        let (obs, mask) = ObsEncoder.encode(state: state)
+        let (obs, mask) = currentEncoding()
         lastMask = mask
 
         // 選擇動作
@@ -154,7 +193,7 @@ public actor NativeMortalBot {
     /// - Returns: 模型選中的動作；沒有合法動作時 nil
     @discardableResult
     public func inferCurrentState() async throws -> MJAIAction? {
-        let (obs, mask) = ObsEncoder.encode(state: state)
+        let (obs, mask) = currentEncoding()
         guard mask.contains(where: { $0 != 0 }) else { return nil }
         lastMask = mask
 
@@ -210,21 +249,19 @@ public actor NativeMortalBot {
 
     /// 取得當前觀測
     public func getObservation() -> [Float] {
-        let (obs, _) = ObsEncoder.encode(state: state)
-        return obs
+        currentEncoding().obs
     }
 
     /// 取得當前遮罩
     public func getMask() -> [UInt8] {
-        let (_, mask) = ObsEncoder.encode(state: state)
-        return mask
+        currentEncoding().mask
     }
 
     /// 取得可用動作候選
     public func getCandidateActions() -> [MJAIAction] {
         var actions: [MJAIAction] = []
 
-        let mask = getMask()
+        let mask = currentEncoding().mask
         for idx in 0..<Self.actionSpace where mask[idx] != 0 {
             if let action = ActionDecoder.decode(actionIdx: idx, state: state) {
                 actions.append(action)
@@ -316,12 +353,13 @@ public actor NativeMortalBot {
         )
 
         // 複製資料
-        for i in 0..<obs.count {
-            obsArray[i] = NSNumber(value: obs[i])
-        }
-        for i in 0..<mask.count {
-            maskArray[i] = NSNumber(value: Float(mask[i]))
-        }
+        //
+        // 原本是逐格 `obsArray[i] = NSNumber(value:)`，等於為 1012×34 = 34,408 個
+        // float 各配一個 NSNumber 再走一次 MLMultiArray 的 subscript。那是純粹的
+        // 搬運成本，跟數值無關。輸入是上面剛配出來的連續 float32 緩衝區，
+        // 整塊 memcpy 進去結果位元相同。
+        try Self.copyFloats(obs, into: obsArray)
+        try Self.copyFloats(mask.map(Float.init), into: maskArray)
 
         // 執行推理
         let input = try MLDictionaryFeatureProvider(dictionary: [
@@ -342,6 +380,27 @@ public actor NativeMortalBot {
         }
 
         return qValues
+    }
+
+    /// 把 Float 陣列整塊搬進 MLMultiArray
+    ///
+    /// ⚠️ 只能用在**這個檔案自己用 `MLMultiArray(shape:dataType: .float32)` 配出來的**
+    /// 陣列：那種配置保證是連續的 float32，才可以無視 strides 直接 memcpy。
+    /// 外來的 MLMultiArray 可能有非連續 strides 或別的 dataType，照這樣搬會寫壞記憶體，
+    /// 所以下面的 guard 是防線不是裝飾——不符合就丟錯，不要退化成「搬一半」。
+    ///
+    /// internal 而非 private：memcpy 換掉逐格裝箱的前提是「搬進去的每一格都一樣」，
+    /// 這件事要能被直接驗（`memcpyIntoMLMultiArrayIsFaithful`），不能只靠
+    /// 「模型看起來還會給合理答案」推論。
+    nonisolated static func copyFloats(_ values: [Float], into array: MLMultiArray) throws {
+        guard array.dataType == .float32, array.count == values.count else {
+            throw MortalError.inferenceInputShapeMismatch(expected: array.count, got: values.count)
+        }
+        guard !values.isEmpty else { return }
+        values.withUnsafeBytes { src in
+            // src.baseAddress 在非空陣列上必為非 nil
+            array.dataPointer.copyMemory(from: src.baseAddress!, byteCount: src.count)
+        }
     }
 
     /// 選擇最佳動作

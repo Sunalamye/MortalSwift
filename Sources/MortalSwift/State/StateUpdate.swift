@@ -15,6 +15,11 @@ extension PlayerState {
     /// - Parameter event: MJAI 事件
     /// - Returns: 是否需要動作
     public func update(event: MJAIEvent) -> Bool {
+        // 每個事件都讓狀態版本前進，observation 快取才知道要重算。
+        // 放在最前面而不是各個 return 之前：分支太多，漏掉一條就是快取回舊值——
+        // 那種錯誤在對局中表現成「bot 用上一巡的張量做決策」，極難從外部察覺。
+        bumpRevision()
+
         // 清除上一輪的動作狀態
         //
         // intermediateKan / intermediateChiPon **不能**在這裡清：它們要從「我吃碰槓」

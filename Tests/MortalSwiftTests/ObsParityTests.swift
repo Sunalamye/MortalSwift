@@ -13,6 +13,7 @@
 //
 
 import CLibRiichi
+import CoreML
 import Foundation
 import Testing
 
@@ -1013,10 +1014,55 @@ private let knownUnportedChannels: Set<Int> = {
     #expect(ShantenCalculator.calcAll(tehai: complete, lenDiv3: 4) == -1, "補上 7s 是和了形")
 }
 
+// MARK: - 編碼延遲
+
+/// 編碼延遲的上限（毫秒）
+///
+/// 只印數字不設門檻的量測擋不住任何回歸——效能變差三倍，測試照樣綠。
+/// 所以這裡把「多慢算壞掉」寫成常數。
+///
+/// 數字怎麼來的（Apple Silicon，2026-08-02 實測，見 docs/decisions/implementation-notes.md）：
+///
+/// | 情境          | Debug 實測    | Release 實測 | 門檻 Debug | 門檻 Release |
+/// |---------------|---------------|--------------|------------|--------------|
+/// | 一般（聽牌）   | 3.2–3.5 ms    | 0.1 ms       | 60 ms      | 20 ms        |
+/// | 最壞（三向聽） | 1194–1593 ms  | 36.9–52.4 ms | 5000 ms    | 250 ms       |
+///
+/// 門檻不是「剛好卡住現值」而是留了 3–200 倍餘裕，理由：期望值 DP 的耗時本來就
+/// 隨機器與負載浮動（同一個 case 幾次量測之間差了 30%），門檻太緊會變成天天紅的
+/// 雜訊，沒人會再認真看它。這裡要擋的是**數量級**的回歸——例如快取失效、
+/// DP 記憶化被改壞、或不小心在迴圈裡重算整張表。
+private enum LatencyBudget {
+    #if DEBUG
+    static let configuration = "Debug"
+    static let typicalMs = 60.0
+    static let worstCaseMs = 5_000.0
+    #else
+    static let configuration = "Release"
+    static let typicalMs = 20.0
+    static let worstCaseMs = 250.0
+    #endif
+
+    /// 慢機器的整體放寬倍率：`MORTALSWIFT_LATENCY_BUDGET_SCALE=3 swift test`
+    ///
+    /// 預設 1.0——門檻要能擋回歸就不能預設放水。這個旋鈕是給「機器不一樣」用的，
+    /// 不是給「這次跑比較慢」用的。調大之前先確認不是自己剛把 encode 弄慢了。
+    static var scale: Double {
+        guard let raw = ProcessInfo.processInfo.environment["MORTALSWIFT_LATENCY_BUDGET_SCALE"],
+              let value = Double(raw), value > 0
+        else { return 1.0 }
+        return value
+    }
+
+    static var typicalLimitMs: Double { typicalMs * scale }
+    static var worstCaseLimitMs: Double { worstCaseMs * scale }
+}
+
 /// 單次 observation 編碼的耗時
 ///
 /// 單人期望值推演是遞迴 + 記憶化的機率 DP，最壞情況很重。
-/// 這東西要在對局中即時跑，所以延遲必須量出來，不能只看正確性。
+/// 這東西要在對局中即時跑，所以延遲必須量出來，而且超標要**失敗**——
+/// 只印數字的版本擋不住回歸。
 @Test func encodeLatency() {
     let state = PlayerState(playerId: 0)
     for json in fullEvents {
@@ -1034,9 +1080,15 @@ private let knownUnportedChannels: Set<Int> = {
     let elapsed = DispatchTime.now().uptimeNanoseconds - start
     let msPerCall = Double(elapsed) / Double(rounds) / 1_000_000
 
-    print("=== observation 編碼耗時 ===")
+    print("=== observation 編碼耗時（\(LatencyBudget.configuration)）===")
     print(String(format: "  每次 %.1f ms（%d 次平均）", msPerCall, rounds))
+    print(String(format: "  門檻 %.1f ms", LatencyBudget.typicalLimitMs))
     print(String(format: "  向聽 %d，剩餘 %d 張", state.realTimeShanten(), state.tilesLeft))
+
+    let typicalLimit = LatencyBudget.typicalLimitMs
+    #expect(
+        msPerCall <= typicalLimit,
+        "編碼延遲回歸：\(msPerCall) ms > 門檻 \(typicalLimit) ms（\(LatencyBudget.configuration)）")
 }
 
 /// 最壞情況：開局、三向聽、牌山幾乎全滿——期望值 DP 的分支在這裡最多
@@ -1058,9 +1110,121 @@ private let knownUnportedChannels: Set<Int> = {
     _ = ObsEncoder.encode(state: state)
     let ms = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
 
-    print("=== 最壞情況編碼耗時 ===")
-    print(String(format: "  %.1f ms", ms))
+    print("=== 最壞情況編碼耗時（\(LatencyBudget.configuration)）===")
+    print(String(format: "  %.1f ms（門檻 %.1f ms）", ms, LatencyBudget.worstCaseLimitMs))
     print("  向聽 \(state.realTimeShanten())，剩餘 \(state.tilesLeft) 張")
+
+    let worstLimit = LatencyBudget.worstCaseLimitMs
+    #expect(
+        ms <= worstLimit,
+        "最壞情況編碼延遲回歸：\(ms) ms > 門檻 \(worstLimit) ms（\(LatencyBudget.configuration)）")
+}
+
+// MARK: - 編碼快取
+
+/// 同一個狀態被連續問三次，encode 只能真的跑一次
+///
+/// Naki 的 `updateAvailableActions()` 就是這個形狀：先 `getMask()`、再
+/// `getCandidateActions()`、推薦流程又問一次 `getMask()`。沒有快取時三次各跑一遍
+/// 完整 encode（含最貴的期望值 DP），一次 UI 更新就疊出秒級延遲——而狀態根本沒動。
+@Test func encodeIsCachedWithinOneStateRevision() async throws {
+    let bot = try NativeMortalBot(playerId: 0, version: 4, useBundledModel: false)
+
+    let events = [
+        #"{"type":"start_game","id":0,"names":["P0","P1","P2","P3"]}"#,
+        #"{"type":"start_kyoku","bakaze":"E","dora_marker":"3p","kyoku":1,"honba":0,"kyotaku":0,"oya":0,"scores":[25000,25000,25000,25000],"tehais":[["1m","2m","3m","4p","5p","6p","7s","8s","9s","E","S","W","N"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"]]}"#,
+        #"{"type":"tsumo","actor":0,"pai":"P"}"#,
+    ]
+    for json in events {
+        _ = try await bot.react(mjaiEvent: json)
+    }
+
+    let baseline = await bot.getEncodeCount()
+
+    _ = await bot.getMask()
+    _ = await bot.getCandidateActions()
+    _ = await bot.getMask()
+    _ = await bot.getObservation()
+
+    let after = await bot.getEncodeCount()
+    #expect(after == baseline, "狀態沒變卻重跑了 \(after - baseline) 次 encode")
+
+    // 而且下一個事件必須讓快取失效——快取回舊張量比慢還糟
+    _ = try await bot.react(
+        mjaiEvent: #"{"type":"dahai","actor":0,"pai":"N","tsumogiri":false}"#)
+    _ = await bot.getMask()
+    let afterNextEvent = await bot.getEncodeCount()
+    #expect(afterNextEvent > after, "事件進來之後快取沒有失效")
+}
+
+/// 快取回的張量必須和當場重算的位元相同
+///
+/// 這是快取唯一不可談判的性質：省時間可以，改數值不行。
+/// 對拍測試證明的是 `ObsEncoder.encode` 對得上 libriichi；這裡證明的是
+/// 走快取的那條路徑拿到的就是同一份東西。
+@Test func cachedEncodingMatchesFreshEncode() async throws {
+    let bot = try NativeMortalBot(playerId: 0, version: 4, useBundledModel: false)
+
+    for json in fullEvents {
+        _ = try? await bot.react(mjaiEvent: json)
+    }
+
+    let cachedObs = await bot.getObservation()
+    let cachedMask = await bot.getMask()
+
+    // 用同一串事件另外養一個狀態，直接呼叫 encode（不經過快取）
+    let reference = PlayerState(playerId: 0)
+    for json in fullEvents {
+        guard let data = json.data(using: .utf8),
+              let event = try? JSONDecoder().decode(MJAIEvent.self, from: data) else { continue }
+        _ = reference.update(event: event)
+    }
+    let fresh = ObsEncoder.encode(state: reference)
+
+    #expect(cachedObs == fresh.obs, "快取的 observation 與重算結果不同")
+    #expect(cachedMask == fresh.mask, "快取的 mask 與重算結果不同")
+}
+
+// MARK: - Core ML 輸入搬運
+
+/// memcpy 進 MLMultiArray 的每一格都要跟逐格裝箱時一樣
+///
+/// 換掉 `obsArray[i] = NSNumber(value:)` 是為了省掉 34,408 次裝箱，前提是
+/// 搬進去的內容一模一樣。這裡拿真實形狀（1012×34 與 46）逐格比對——
+/// 「模型還會給合理答案」不足以證明這件事，錯一小段照樣看起來正常。
+@Test func memcpyIntoMLMultiArrayIsFaithful() throws {
+    // 用可辨識的值，全 0 或全 1 會讓「根本沒搬」也通過
+    let obsCount = NativeMortalBot.obsChannels * NativeMortalBot.obsWidth
+    var values = [Float](repeating: 0, count: obsCount)
+    for i in 0..<obsCount {
+        values[i] = Float(i % 97) / 97.0
+    }
+
+    let array = try MLMultiArray(
+        shape: [1, NSNumber(value: NativeMortalBot.obsChannels),
+                NSNumber(value: NativeMortalBot.obsWidth)],
+        dataType: .float32)
+    try NativeMortalBot.copyFloats(values, into: array)
+
+    var mismatches = 0
+    for i in 0..<obsCount where array[i].floatValue != values[i] {
+        mismatches += 1
+    }
+    #expect(mismatches == 0, "\(mismatches)/\(obsCount) 格與來源不同")
+
+    // 遮罩那條路徑（UInt8 → Float）
+    let mask: [UInt8] = (0..<NativeMortalBot.actionSpace).map { UInt8($0 % 2) }
+    let maskArray = try MLMultiArray(
+        shape: [1, NSNumber(value: NativeMortalBot.actionSpace)], dataType: .float32)
+    try NativeMortalBot.copyFloats(mask.map(Float.init), into: maskArray)
+    for i in 0..<NativeMortalBot.actionSpace {
+        #expect(maskArray[i].floatValue == Float(mask[i]), "mask[\(i)] 搬錯")
+    }
+
+    // 長度對不上必須丟錯，不能默默搬一半
+    #expect(throws: MortalError.self) {
+        try NativeMortalBot.copyFloats([1, 2, 3], into: maskArray)
+    }
 }
 
 /// 端到端合理性檢查：完整 observation 餵進模型後，推薦是不是合理的

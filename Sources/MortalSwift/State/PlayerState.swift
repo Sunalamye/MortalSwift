@@ -23,6 +23,27 @@ public final class PlayerState: @unchecked Sendable {
     /// 模型版本
     public let version: Int
 
+    // MARK: - Revision
+
+    /// 狀態版本號：每處理一個 MJAI 事件就 +1
+    ///
+    /// 存在的唯一理由是 observation 快取（見 `NativeMortalBot.currentEncoding()`）。
+    /// 「狀態有沒有變」不能靠比對整份狀態判斷——那比重跑一次 encode 還貴——
+    /// 所以改用「處理過幾個事件」當版本號：事件是狀態唯一的合法入口。
+    ///
+    /// ⚠️ 前提：狀態只由 `update(event:)` 改。直接寫 `tehai` / `lastCans` 之類的
+    /// 欄位（測試裡有這種用法）**不會**讓版本前進。那種情況請直接呼叫
+    /// `ObsEncoder.encode`（它不看快取），或先呼叫 `bumpRevision()`，
+    /// 否則快取會回上一版的張量。
+    public private(set) var revision: Int = 0
+
+    /// 手動宣告「狀態已經變了」
+    ///
+    /// 繞過 `update(event:)` 直接改欄位時用。多叫幾次只是讓快取失效，不會算錯。
+    public func bumpRevision() {
+        revision &+= 1
+    }
+
     // MARK: - Round Context
 
     /// 場風

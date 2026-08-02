@@ -430,7 +430,11 @@ public struct ObsEncoder {
             ctx.idx += 3 * maxNumTurns         // 聽牌率 / 和牌率 / 期望值表
         }
 
-        assert(ctx.idx == obsChannels, "channel 佈局錯誤：寫到 \(ctx.idx)，應為 \(obsChannels)")
+        // 用 precondition 而不是 assert：`assert` 在 Release 會被整個編掉，
+        // 而這一格正是「Release 才更需要」的檢查——channel 數對不上代表整份張量的
+        // 語意都推移了，模型會照著一份看不懂的輸入給出看似正常的機率。
+        // 那種錯誤不會自己浮出來，只會表現成「bot 變弱了」。寧可當場停住。
+        precondition(ctx.idx == obsChannels, "channel 佈局錯誤：寫到 \(ctx.idx)，應為 \(obsChannels)")
 
         return (ctx.obs, ctx.mask)
     }
