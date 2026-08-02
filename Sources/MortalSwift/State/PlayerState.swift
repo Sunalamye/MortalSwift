@@ -106,7 +106,10 @@ public final class PlayerState: @unchecked Sendable {
     public var doraFactor: [Int] = [Int](repeating: 0, count: 34)
     /// 已見的牌數
     public var tilesSeen: [Int] = [Int](repeating: 0, count: 34)
-    /// 禁止打出的牌 (振聽等)
+    /// 食い替え禁手：自家吃／碰之後這一巡不能打出的牌
+    ///
+    /// 只在「副露完接著要打那一張」的時點有值，打完就清空（見 `handleDahai`）。
+    /// 內容由 `handleChi` / `handlePon` 寫入：現物（被吃碰的那張同種）與吃的筋。
     public var forbiddenTiles: [Bool] = [Bool](repeating: false, count: 34)
     /// 已打過的牌
     public var discardedTiles: [Bool] = [Bool](repeating: false, count: 34)
@@ -368,7 +371,13 @@ public final class PlayerState: @unchecked Sendable {
 
         // 嘗試加入每張牌看是否能和
         for idx in 0..<34 {
-            guard tehai[idx] < 4 else { continue }
+            // 四張全部現身的牌不算「聽」——摸不到也榮不到。
+            //
+            // 判準是**已見四張**（自己手上／副露／四家的河全算），不是「自己持有四張」：
+            // 三家各打掉一張、自己手上留一張的單騎同樣是死聽，libriichi 的 ch860
+            // 在那個局面是空的（見對拍劇本 waits-dead-tile）。
+            // 原本寫成 `tehai[idx] < 4`，只擋得住自己捏著四張的那一種。
+            guard tilesSeen[idx] < 4 else { continue }
 
             var testTehai = tehai
             testTehai[idx] += 1

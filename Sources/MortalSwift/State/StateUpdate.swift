@@ -282,6 +282,11 @@ extension PlayerState {
             removeTile(tile)
             discardedTiles[tile.deaka.index] = true
 
+            // 食い替え禁手到此為止：它的作用範圍就是「副露完的這一張打牌」。
+            // 下一次輪到自己打牌（摸牌或再次副露）之前不會有人讀它，
+            // 所以在這裡清就等於「至下一次摸牌解除」，而且不必在每個 handler 補清。
+            forbiddenTiles = [Bool](repeating: false, count: 34)
+
             // W 立直失效
             canWRiichi = false
 
@@ -357,6 +362,8 @@ extension PlayerState {
             // 同摸牌：副露後是 3n+2，不重算 waits
             updateShanten()
 
+            markKuikaeAfterChi(target: event.pai, consumed: event.consumed)
+
             // 需要打牌
             lastCans.canDiscard = true
             updateShantenDiscards()
@@ -388,10 +395,46 @@ extension PlayerState {
             // 同摸牌：副露後是 3n+2，不重算 waits
             updateShanten()
 
+            // 碰的食い替え只有現物：把剛碰的那張再打出去等於白碰一手
+            forbiddenTiles = [Bool](repeating: false, count: 34)
+            let ponIdx = event.pai.deaka.index
+            if ponIdx >= 0 && ponIdx < 34 {
+                forbiddenTiles[ponIdx] = true
+            }
+
             // 需要打牌
             lastCans.canDiscard = true
             updateShantenDiscards()
         }
+    }
+
+    /// 吃之後的食い替え禁手
+    ///
+    /// 兩條規則（以 libriichi 逐劇本對拍確認，見 `kuikae-chi-*` 對拍劇本）：
+    ///
+    /// 1. **現物**：被吃的那張同種一律不能打。
+    /// 2. **筋**：被吃的牌落在順子的**某一端**時（手上那兩張是連續的），
+    ///    另一端外側那張也不能打——`4m5m` 吃 `3m` 成 345m，打 6m 等於把
+    ///    「本來就能吃成 456m」的那手還原回去，是同一種白吃。
+    ///
+    /// 嵌張吃（`3m5m` 吃 `4m`）**沒有筋**：手上那兩張不連續，沒有第二種吃法。
+    /// 這是實作時最容易多禁的地方，對拍劇本 `kuikae-chi-mid` 專門守著它。
+    ///
+    /// 筋那張若越過花色邊界（`8m9m` 吃 `7m` 的「10m」）就不存在，不寫入。
+    private func markKuikaeAfterChi(target: Tile, consumed: [Tile]) {
+        forbiddenTiles = [Bool](repeating: false, count: 34)
+
+        let targetIdx = target.deaka.index
+        guard targetIdx >= 0 && targetIdx < 27, consumed.count == 2 else { return }
+        forbiddenTiles[targetIdx] = true
+
+        let a = consumed[0].deaka.index
+        let b = consumed[1].deaka.index
+        guard max(a, b) - min(a, b) == 1 else { return }  // 嵌張：沒有筋
+
+        let suji = targetIdx < min(a, b) ? targetIdx + 3 : targetIdx - 3
+        guard suji >= 0 && suji < 27, suji / 9 == targetIdx / 9 else { return }
+        forbiddenTiles[suji] = true
     }
 
     private func handleDaiminkan(_ event: DaiminkanEvent) {

@@ -352,6 +352,224 @@ private let furitenMeldEvents: [String] = [
     #"{"type":"dahai","actor":1,"pai":"8s","tsumogiri":false}"#,
 ]
 
+// MARK: - 食い替え（kuikae）劇本
+//
+// 原本所有劇本的吃／碰都是**別人**做的（唯一的自家碰在 furiten-meld，
+// 而那個時點被 runBoth 當成已知缺口跳過），所以「自家副露之後要打哪一張」
+// 從來沒有進過 oracle 比對——`forbiddenTiles` 恆 false 也不會被抓到。
+//
+// 下面七個劇本把食い替え的各種形狀走一遍（吃的三種位置＋兩種花色邊界＋碰＋碰紅五），
+// 每一條都滿足兩個條件：
+//   1. 被禁的那幾張**還留在手上**（否則 mask 那格本來就是 0，等於沒驗）
+//   2. 副露打牌之後會再走到一次自家摸牌（驗禁手有解除，不是永久黏住）
+//
+// 座位安排：自己是 seat 0，莊家 seat 1，所以上家是 seat 3——吃只能吃上家。
+
+/// 食い替え A：吃上家打的 3m（吃的牌在順子最小位）
+///
+/// 手上 3m4m5m6m，用 4m5m 吃 3m 成 345m。
+/// 禁手：3m（現物）與 6m（筋）——兩張都還在手上，mask[2] 與 mask[5] 必須是 0。
+private let kuikaeChiLowEvents: [String] = [
+    #"{"type":"start_game","id":0,"names":["A","B","C","D"]}"#,
+    #"{"type":"start_kyoku","bakaze":"E","dora_marker":"E","kyoku":2,"honba":0,"kyotaku":0,"oya":1,"scores":[25000,25000,25000,25000],"tehais":[["3m","4m","5m","6m","1p","2p","3p","5p","6p","7p","2s","3s","4s"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"]]}"#,
+    #"{"type":"tsumo","actor":1,"pai":"?"}"#,
+    #"{"type":"dahai","actor":1,"pai":"S","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":2,"pai":"?"}"#,
+    #"{"type":"dahai","actor":2,"pai":"W","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":3,"pai":"?"}"#,
+    #"{"type":"dahai","actor":3,"pai":"3m","tsumogiri":false}"#,
+    #"{"type":"chi","actor":0,"target":3,"pai":"3m","consumed":["4m","5m"]}"#,
+    #"{"type":"dahai","actor":0,"pai":"1p","tsumogiri":false}"#,
+    // 走到下一次自家摸牌，驗禁手已解除
+    #"{"type":"tsumo","actor":1,"pai":"?"}"#,
+    #"{"type":"dahai","actor":1,"pai":"N","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":2,"pai":"?"}"#,
+    #"{"type":"dahai","actor":2,"pai":"P","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":3,"pai":"?"}"#,
+    #"{"type":"dahai","actor":3,"pai":"F","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":0,"pai":"9s"}"#,
+    #"{"type":"dahai","actor":0,"pai":"9s","tsumogiri":true}"#,
+]
+
+/// 食い替え B：吃上家打的 6m（吃的牌在順子最大位）
+///
+/// 手上 3m4m5m6m，用 4m5m 吃 6m 成 456m。
+/// 禁手：6m（現物）與 3m（筋）。與 A 是鏡像，但走的是 `canChiHigh` 那一格。
+private let kuikaeChiHighEvents: [String] = [
+    #"{"type":"start_game","id":0,"names":["A","B","C","D"]}"#,
+    #"{"type":"start_kyoku","bakaze":"E","dora_marker":"E","kyoku":2,"honba":0,"kyotaku":0,"oya":1,"scores":[25000,25000,25000,25000],"tehais":[["3m","4m","5m","6m","1p","2p","3p","5p","6p","7p","2s","3s","4s"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"]]}"#,
+    #"{"type":"tsumo","actor":1,"pai":"?"}"#,
+    #"{"type":"dahai","actor":1,"pai":"S","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":2,"pai":"?"}"#,
+    #"{"type":"dahai","actor":2,"pai":"W","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":3,"pai":"?"}"#,
+    #"{"type":"dahai","actor":3,"pai":"6m","tsumogiri":false}"#,
+    #"{"type":"chi","actor":0,"target":3,"pai":"6m","consumed":["4m","5m"]}"#,
+    #"{"type":"dahai","actor":0,"pai":"1p","tsumogiri":false}"#,
+    #"{"type":"tsumo","actor":1,"pai":"?"}"#,
+    #"{"type":"dahai","actor":1,"pai":"N","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":2,"pai":"?"}"#,
+    #"{"type":"dahai","actor":2,"pai":"P","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":3,"pai":"?"}"#,
+    #"{"type":"dahai","actor":3,"pai":"F","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":0,"pai":"9s"}"#,
+    #"{"type":"dahai","actor":0,"pai":"9s","tsumogiri":true}"#,
+]
+
+/// 食い替え C：嵌張吃（吃的牌在順子中間）—— **只有現物**，沒有筋
+///
+/// 手上 3m4m4m5m，用 3m5m 吃 4m 成 345m，手上還留一對 4m。
+/// 禁手只有 4m。這一條的作用是防止「筋的規則被套用到嵌張」——
+/// 那會多禁掉 1m/7m，是實作食い替え時最容易寫錯的地方。
+private let kuikaeChiMidEvents: [String] = [
+    #"{"type":"start_game","id":0,"names":["A","B","C","D"]}"#,
+    #"{"type":"start_kyoku","bakaze":"E","dora_marker":"E","kyoku":2,"honba":0,"kyotaku":0,"oya":1,"scores":[25000,25000,25000,25000],"tehais":[["3m","4m","4m","5m","1p","2p","3p","5p","6p","8p","2s","3s","4s"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"]]}"#,
+    #"{"type":"tsumo","actor":1,"pai":"?"}"#,
+    #"{"type":"dahai","actor":1,"pai":"S","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":2,"pai":"?"}"#,
+    #"{"type":"dahai","actor":2,"pai":"W","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":3,"pai":"?"}"#,
+    #"{"type":"dahai","actor":3,"pai":"4m","tsumogiri":false}"#,
+    #"{"type":"chi","actor":0,"target":3,"pai":"4m","consumed":["3m","5m"]}"#,
+    #"{"type":"dahai","actor":0,"pai":"8p","tsumogiri":false}"#,
+    #"{"type":"tsumo","actor":1,"pai":"?"}"#,
+    #"{"type":"dahai","actor":1,"pai":"N","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":2,"pai":"?"}"#,
+    #"{"type":"dahai","actor":2,"pai":"P","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":3,"pai":"?"}"#,
+    #"{"type":"dahai","actor":3,"pai":"F","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":0,"pai":"9s"}"#,
+    #"{"type":"dahai","actor":0,"pai":"9s","tsumogiri":true}"#,
+]
+
+/// 食い替え C2：吃 7m 成 789m —— 筋那張（「10m」）不存在，不能滾到下一個花色
+///
+/// `targetIdx + 3` = 9，那是 1p。手上刻意留著 1p：若實作沒擋花色邊界，
+/// mask[9] 會被關掉，對拍立刻抓到。
+private let kuikaeChiEdgeHighEvents: [String] = [
+    #"{"type":"start_game","id":0,"names":["A","B","C","D"]}"#,
+    #"{"type":"start_kyoku","bakaze":"E","dora_marker":"E","kyoku":2,"honba":0,"kyotaku":0,"oya":1,"scores":[25000,25000,25000,25000],"tehais":[["7m","8m","9m","1p","2p","3p","5p","6p","7p","2s","3s","4s","E"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"]]}"#,
+    #"{"type":"tsumo","actor":1,"pai":"?"}"#,
+    #"{"type":"dahai","actor":1,"pai":"S","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":2,"pai":"?"}"#,
+    #"{"type":"dahai","actor":2,"pai":"W","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":3,"pai":"?"}"#,
+    #"{"type":"dahai","actor":3,"pai":"7m","tsumogiri":false}"#,
+    #"{"type":"chi","actor":0,"target":3,"pai":"7m","consumed":["8m","9m"]}"#,
+    #"{"type":"dahai","actor":0,"pai":"E","tsumogiri":false}"#,
+    #"{"type":"tsumo","actor":1,"pai":"?"}"#,
+    #"{"type":"dahai","actor":1,"pai":"N","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":2,"pai":"?"}"#,
+    #"{"type":"dahai","actor":2,"pai":"P","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":3,"pai":"?"}"#,
+    #"{"type":"dahai","actor":3,"pai":"F","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":0,"pai":"9s"}"#,
+    #"{"type":"dahai","actor":0,"pai":"9s","tsumogiri":true}"#,
+]
+
+/// 食い替え C3：吃 3m 成 123m —— 筋那張是負索引，同樣不存在
+///
+/// `targetIdx - 3` = -1。少了下界檢查在 Swift 是直接 crash，不是靜默錯誤，
+/// 所以這條劇本同時當成邊界的煙霧測試。
+private let kuikaeChiEdgeLowEvents: [String] = [
+    #"{"type":"start_game","id":0,"names":["A","B","C","D"]}"#,
+    #"{"type":"start_kyoku","bakaze":"E","dora_marker":"E","kyoku":2,"honba":0,"kyotaku":0,"oya":1,"scores":[25000,25000,25000,25000],"tehais":[["1m","2m","3m","5p","6p","7p","2s","3s","4s","7s","8s","9s","E"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"]]}"#,
+    #"{"type":"tsumo","actor":1,"pai":"?"}"#,
+    #"{"type":"dahai","actor":1,"pai":"S","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":2,"pai":"?"}"#,
+    #"{"type":"dahai","actor":2,"pai":"W","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":3,"pai":"?"}"#,
+    #"{"type":"dahai","actor":3,"pai":"3m","tsumogiri":false}"#,
+    #"{"type":"chi","actor":0,"target":3,"pai":"3m","consumed":["1m","2m"]}"#,
+    #"{"type":"dahai","actor":0,"pai":"E","tsumogiri":false}"#,
+    #"{"type":"tsumo","actor":1,"pai":"?"}"#,
+    #"{"type":"dahai","actor":1,"pai":"N","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":2,"pai":"?"}"#,
+    #"{"type":"dahai","actor":2,"pai":"P","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":3,"pai":"?"}"#,
+    #"{"type":"dahai","actor":3,"pai":"F","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":0,"pai":"9p"}"#,
+    #"{"type":"dahai","actor":0,"pai":"9p","tsumogiri":true}"#,
+]
+
+/// 食い替え D：碰 —— 只禁現物，沒有筋
+///
+/// 手上 5p5p5p，碰下家打的 5p，手上還留一張 5p → mask[13] 必須是 0。
+/// 碰完手上還有 5p，所以下一次摸牌時 `canKakan` 也會亮，順便走到加槓那一格。
+private let kuikaePonEvents: [String] = [
+    #"{"type":"start_game","id":0,"names":["A","B","C","D"]}"#,
+    #"{"type":"start_kyoku","bakaze":"E","dora_marker":"1s","kyoku":2,"honba":0,"kyotaku":0,"oya":1,"scores":[25000,25000,25000,25000],"tehais":[["5p","5p","5p","1m","2m","3m","7m","8m","9m","2s","3s","4s","E"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"]]}"#,
+    #"{"type":"tsumo","actor":1,"pai":"?"}"#,
+    #"{"type":"dahai","actor":1,"pai":"5p","tsumogiri":false}"#,
+    #"{"type":"pon","actor":0,"target":1,"pai":"5p","consumed":["5p","5p"]}"#,
+    #"{"type":"dahai","actor":0,"pai":"E","tsumogiri":false}"#,
+    #"{"type":"tsumo","actor":2,"pai":"?"}"#,
+    #"{"type":"dahai","actor":2,"pai":"W","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":3,"pai":"?"}"#,
+    #"{"type":"dahai","actor":3,"pai":"N","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":0,"pai":"9p"}"#,
+    #"{"type":"dahai","actor":0,"pai":"9p","tsumogiri":true}"#,
+]
+
+/// 食い替え E：碰完手上只剩紅五 —— 禁手要同時關掉普通五與紅五兩格
+///
+/// 手上 5s5s5sr，用兩張普通 5s 碰，手上只剩 5sr。
+/// 禁手是「5s 這個牌種」，所以 mask[22]（普通五索）與 mask[36]（紅五索）都要是 0；
+/// 只擋 34 格那一版會讓紅五那格漏出來，送出去一樣是犯規打牌。
+/// 解除之後 mask[36] 會變 1、mask[22] 仍是 0（手上那張五索是紅的，見 `applyAkaToCandidates`）。
+private let kuikaePonAkaEvents: [String] = [
+    #"{"type":"start_game","id":0,"names":["A","B","C","D"]}"#,
+    #"{"type":"start_kyoku","bakaze":"E","dora_marker":"9m","kyoku":2,"honba":0,"kyotaku":0,"oya":1,"scores":[25000,25000,25000,25000],"tehais":[["5s","5s","5sr","1m","2m","3m","7m","8m","9m","2s","3s","4s","E"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"]]}"#,
+    #"{"type":"tsumo","actor":1,"pai":"?"}"#,
+    #"{"type":"dahai","actor":1,"pai":"5s","tsumogiri":false}"#,
+    #"{"type":"pon","actor":0,"target":1,"pai":"5s","consumed":["5s","5s"]}"#,
+    #"{"type":"dahai","actor":0,"pai":"E","tsumogiri":false}"#,
+    #"{"type":"tsumo","actor":2,"pai":"?"}"#,
+    #"{"type":"dahai","actor":2,"pai":"W","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":3,"pai":"?"}"#,
+    #"{"type":"dahai","actor":3,"pai":"N","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":0,"pai":"9p"}"#,
+    #"{"type":"dahai","actor":0,"pai":"9p","tsumogiri":true}"#,
+]
+
+/// 待牌枯竭：四張全部現身的牌不算「聽」
+///
+/// 這條劇本是補食い替え劇本時被 oracle 抓出來的鄰近缺口，跟副露無關：
+/// `234m 678m 567p 345s` 單騎 9p，三家各打掉一張 9p 之後，
+/// 加上自己手上那張，9p 已經四張全現——**摸不到也榮不到**，libriichi 因此
+/// 把它從 waits 拿掉（ch860 那一格清空）。
+///
+/// 特意不用副露來湊滿四張：那樣「自家持有 4 張」與「場上已見 4 張」兩種判準
+/// 會給出同樣的答案，分不出 libriichi 用的是哪一個。這裡三張在別人的河裡，
+/// 只有「已見四張」這個判準會排除它。
+///
+/// 手是無役聽牌（9p 單騎，不斷么、不平和），所以別人打 9p 時不會被問要不要榮，
+/// 劇本才走得下去。
+private let waitsDeadTileEvents: [String] = [
+    #"{"type":"start_game","id":0,"names":["A","B","C","D"]}"#,
+    #"{"type":"start_kyoku","bakaze":"E","dora_marker":"E","kyoku":1,"honba":0,"kyotaku":0,"oya":0,"scores":[25000,25000,25000,25000],"tehais":[["2m","3m","4m","6m","7m","8m","5p","6p","7p","9p","3s","4s","5s"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"],["?","?","?","?","?","?","?","?","?","?","?","?","?"]]}"#,
+    #"{"type":"tsumo","actor":0,"pai":"1s"}"#,
+    #"{"type":"dahai","actor":0,"pai":"1s","tsumogiri":true}"#,
+    // 三家各打一張 9p：加上自己手上那張，四張全現
+    #"{"type":"tsumo","actor":1,"pai":"?"}"#,
+    #"{"type":"dahai","actor":1,"pai":"9p","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":2,"pai":"?"}"#,
+    #"{"type":"dahai","actor":2,"pai":"9p","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":3,"pai":"?"}"#,
+    #"{"type":"dahai","actor":3,"pai":"9p","tsumogiri":true}"#,
+    // 自家摸打一次，waits 在這裡重算
+    #"{"type":"tsumo","actor":0,"pai":"1m"}"#,
+    #"{"type":"dahai","actor":0,"pai":"1m","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":1,"pai":"?"}"#,
+    #"{"type":"dahai","actor":1,"pai":"E","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":2,"pai":"?"}"#,
+    #"{"type":"dahai","actor":2,"pai":"E","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":3,"pai":"?"}"#,
+    #"{"type":"dahai","actor":3,"pai":"E","tsumogiri":true}"#,
+    #"{"type":"tsumo","actor":0,"pai":"1m"}"#,
+    #"{"type":"dahai","actor":0,"pai":"1m","tsumogiri":true}"#,
+]
+
 /// 對拍劇本清單
 private let parityScenarios: [(label: String, events: [String])] = [
     ("minimal", minimalEvents),
@@ -365,6 +583,40 @@ private let parityScenarios: [(label: String, events: [String])] = [
     ("furiten-discard", furitenDiscardEvents),
     ("furiten-no-yaku", furitenNoYakuEvents),
     ("furiten-meld", furitenMeldEvents),
+    ("kuikae-chi-low", kuikaeChiLowEvents),
+    ("kuikae-chi-high", kuikaeChiHighEvents),
+    ("kuikae-chi-mid", kuikaeChiMidEvents),
+    ("kuikae-chi-edge-high", kuikaeChiEdgeHighEvents),
+    ("kuikae-chi-edge-low", kuikaeChiEdgeLowEvents),
+    ("kuikae-pon", kuikaePonEvents),
+    ("kuikae-pon-aka", kuikaePonAkaEvents),
+    ("waits-dead-tile", waitsDeadTileEvents),
+]
+
+/// 食い替え劇本的預期
+///
+/// - `forbidden`：副露後打牌那一格該關掉的 mask 索引（0-33 普通牌、34-36 紅五）
+/// - `stillAllowed`：同一格必須**維持開著**的索引。用來釘住「不該多禁」的那幾張——
+///   `forbidden` 只證明有禁到，證明不了沒有禁過頭。
+/// - `releasedAfterDraw`：下一次自家摸牌時該放行的索引。不一定等於 `forbidden`：
+///   手上只剩紅五時，解除後亮的是紅五那格而不是普通五那格。
+private let kuikaeExpectations: [(
+    label: String, forbidden: [Int], stillAllowed: [Int], releasedAfterDraw: [Int]
+)] = [
+    // 3m 現物 + 6m 筋
+    ("kuikae-chi-low", [2, 5], [9, 19], [2, 5]),
+    // 6m 現物 + 3m 筋
+    ("kuikae-chi-high", [5, 2], [9, 19], [5, 2]),
+    // 4m 現物；嵌張沒有筋 → 1m(0) 與 7m(6) 都不該被牽連
+    ("kuikae-chi-mid", [3], [9, 19], [3]),
+    // 7m 現物；筋落在「10m」→ 不存在，1p(9) 必須維持可打
+    ("kuikae-chi-edge-high", [6], [9, 19], [6]),
+    // 3m 現物；筋是負索引 → 不存在，2s(19) 與 7s(24) 必須維持可打
+    ("kuikae-chi-edge-low", [2], [19, 24], [2]),
+    // 5p 現物；碰沒有筋 → 2p(10) 與 8p(16) 不該被牽連（手上沒有，改釘 1m/2s）
+    ("kuikae-pon", [13], [0, 19], [13]),
+    // 5s 牌種（普通五與紅五兩格一起關）
+    ("kuikae-pon-aka", [22, 36], [0, 19], [36]),
 ]
 
 /// 振聽劇本的標籤
@@ -393,6 +645,12 @@ private func isSelfDeclaration(_ json: String) -> Bool {
     return false
 }
 
+/// 是不是「自家吃／碰」——副露完直接接一張打牌，而且那張打牌受食い替え限制
+private func isSelfChiPon(_ json: String) -> Bool {
+    guard json.contains(#""actor":0"#) else { return false }
+    return json.contains(#""type":"chi""#) || json.contains(#""type":"pon""#)
+}
+
 /// 把同一串事件同時餵給 libriichi 與純 Swift，收集**每一個**需要動作的時點
 private func runBoth(_ events: [String], label: String) -> [ParitySnapshot] {
     guard let oracle = LibRiichiOracle(playerId: 0) else { return [] }
@@ -417,13 +675,25 @@ private func runBoth(_ events: [String], label: String) -> [ParitySnapshot] {
         if let o = oracleResult, let s = swiftResult {
             snapshots.append(ParitySnapshot(label: "\(label)#\(i)", oracle: o, swift: s))
             pendingOracle = nil
-        } else if oracleResult != nil && swiftResult == nil && isSelfDeclaration(json) {
-            // 已知缺口（見 tasks/mortalswift/README.md「對拍劇本已知缺口」）：
-            // 自家宣告立直／吃／碰／槓之後，MJAI 還會要你打一張，libriichi 因此回
-            // ACTION_REQUIRED；純 Swift 的 `update` 對這些事件一律回 false，
-            // 打牌是由呼叫端另外驅動的（`inferCurrentState()`）。
+        } else if let o = oracleResult, swiftResult == nil, isSelfChiPon(json), state.lastCans.canDiscard {
+            // 自家吃／碰之後 MJAI 不會再送事件要你打牌：libriichi 回 ACTION_REQUIRED，
+            // 純 Swift 的 `update` 回 false，那一張打牌是呼叫端用 `inferCurrentState()`
+            // 驅動的——而它做的事就是「直接對當前狀態編碼」。
             //
-            // 這跟紅五無關，但紅五劇本必須走過「自家立直」才到得了「立直後摸紅五」，
+            // 所以這裡照樣編一次來比對。**食い替え禁手正好只出現在這個時點**，
+            // 不比對等於 oracle 永遠抓不到（`forbiddenTiles` 全 false 也會綠燈）。
+            let encoded = ObsEncoder.encode(state: state)
+            snapshots.append(ParitySnapshot(
+                label: "\(label)#\(i)[副露後打牌]",
+                oracle: o,
+                swift: (encoded.0, encoded.1.map { $0 != 0 })))
+            pendingOracle = nil
+        } else if oracleResult != nil && swiftResult == nil && isSelfDeclaration(json) {
+            // 剩下的已知缺口（見 tasks/mortalswift/README.md「對拍劇本已知缺口」）：
+            // 自家宣告立直／槓之後 libriichi 同樣回 ACTION_REQUIRED，
+            // 但純 Swift 的 `update` 回 false，且 `lastCans` 也沒有進入可打牌狀態。
+            //
+            // 紅五劇本必須走過「自家立直」才到得了「立直後摸紅五」，
             // 所以這裡明確跳過、不當成落差。真的要修那個缺口時把這個分支拔掉，
             // 對拍會立刻把它抓回來。
             continue
@@ -610,6 +880,48 @@ private let knownUnportedChannels: Set<Int> = {
     #expect(sawFuritenOff, "劇本沒有走到「非振聽」（ch861=0）")
     #expect(sawRonOffered, "劇本沒有走到任何榮和機會（mask[43]=1）")
     #expect(sawRonBlockedByFuriten, "劇本沒有走到「振聽擋掉榮和」的局面")
+}
+
+/// 食い替え劇本真的走到「副露後打牌」而且 libriichi 真的禁了那幾張嗎
+///
+/// 沒有這一條，`maskParityAgainstLibRiichi` 在食い替え這一段可能只是
+/// 「兩邊都放行」——那等於沒驗到任何東西。這裡直接對 **libriichi 自己的輸出**斷言：
+/// - 副露後打牌那一格，禁手索引全是 0（而且其他手上的牌還是 1，證明不是整排關掉）
+/// - 下一次自家摸牌那一格，該放行的索引回到 1（證明禁手會解除，不是永久黏住）
+@Test func kuikaeScenariosActuallyForbidTiles() {
+    for (label, forbidden, stillAllowed, released) in kuikaeExpectations {
+        guard let scenario = parityScenarios.first(where: { $0.label == label }) else {
+            Issue.record("找不到劇本 \(label)")
+            continue
+        }
+        let snapshots = runBoth(scenario.events, label: label)
+        guard let meld = snapshots.first(where: { $0.label.contains("副露後打牌") }) else {
+            Issue.record("[\(label)] 劇本沒有走到「副露後打牌」的時點")
+            continue
+        }
+
+        for idx in forbidden {
+            #expect(!meld.oracle.mask[idx],
+                    "[\(label)] libriichi 在副露後仍允許打 index \(idx)（食い替え劇本失效）")
+        }
+        // 沒有禁過頭：這幾張手上有、規則沒禁，必須維持可打
+        for idx in stillAllowed {
+            #expect(meld.oracle.mask[idx],
+                    "[\(label)] libriichi 在副露後把 index \(idx) 也禁了？劇本或預期寫錯了")
+        }
+
+        // 解除：副露打牌之後再摸一次牌，被禁的那幾張要回來
+        guard let afterDraw = snapshots.last else {
+            Issue.record("[\(label)] 沒有任何比對時點")
+            continue
+        }
+        #expect(!afterDraw.label.contains("副露後打牌"),
+                "[\(label)] 劇本結束在副露當下，沒有走到下一次自家摸牌")
+        for idx in released {
+            #expect(afterDraw.oracle.mask[idx],
+                    "[\(label)] 下一次摸牌時 index \(idx) 仍被禁（食い替え沒有解除）")
+        }
+    }
 }
 
 /// `atFuriten` 只該影響 ch861 這一格
