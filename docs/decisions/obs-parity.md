@@ -141,3 +141,36 @@ observation 佈局該讀 `obs_repr.rs`、`shanten` 何時該重算該讀 `update
 - `shantenAgainstLibRiichiCases`：libriichi 自己的 19 個案例全過（**現況達成**）
 - 未移植的 124 格補完後，`knownUnportedChannels` 要清空
 - 對拍測試永久保留，作為日後修改編碼器的回歸保護
+
+---
+
+## 補記（2026-08-02）：紅五劇本
+
+原本的兩個劇本（`minimal` / `full`）**一張紅五都沒有**，所以 mask 34-36 兩邊
+永遠都是 0——「對拍零落差」在紅五這一段其實什麼都沒驗到。
+補了三個劇本（`aka-discard` / `aka-riichi` / `aka-meld`），並加一條
+`akaScenariosActuallyExerciseAkaMask` 斷言 libriichi 自己真的在這些時點打開了
+34-36，避免劇本退化成「兩邊都是 0」。
+
+補完後立刻抓到兩個先前看不見的落差：
+
+1. **ch722（未見寶牌數）** — `akasSeen` 只在有人**打出**紅五時才設。
+   自己配牌／摸到的紅五不算「已見」，`doras_unseen` 因此多算一張；
+   同一個旗標還被單人期望值推演拿去當 `akasInWall`，等於讓 DP 以為
+   自己手上那張紅五還能再摸到一次。改成跟 `tilesSeen` 同一個入口
+   （`markTileSeen`）標記——語意是「這張紅五已經現身」，不是「已經被打出」。
+
+2. **ch15-18（順位）** — `rank` 只在開局算一次。立直成立扣掉 1000 點之後
+   分數變了、順位沒變，四家同分時自己立直會從「暫定第一」掉到最後，
+   obs 卻還停在第一。`handleReachAccepted` 補上 `updateRank()`。
+
+兩者都與紅五本身無關，是紅五劇本走到了先前沒人走過的路徑才暴露出來的。
+這正是「修規則 bug 前先補對應劇本」的理由。
+
+### 這一輪仍未修的已知缺口
+
+`aka-riichi` 劇本會走到自家 `reach` 事件。MJAI 在你宣告立直之後還會要你打一張，
+libriichi 因此回 `ACTION_REQUIRED`，純 Swift 的 `update` 對自家宣告事件
+（reach／chi／pon／kan）一律回 `false`——打牌是由呼叫端另外驅動的
+（`inferCurrentState()`）。對拍工具裡用 `isSelfDeclaration()` 明確跳過這一類時點，
+**不是**當成一致，而是標記成已知缺口；修那個缺口時把該分支拔掉，對拍會立刻抓回來。

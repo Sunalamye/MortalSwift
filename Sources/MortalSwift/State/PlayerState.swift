@@ -391,14 +391,25 @@ public final class PlayerState: @unchecked Sendable {
 public extension PlayerState {
     /// 動作索引常量
     enum ActionIndex {
-        // 0-33: 打牌
+        // 0-33: 打牌（普通牌；五萬/五筒/五索是 4/13/22）
         public static let discardStart = 0
         public static let discardEnd = 33
 
-        // 34-36: 保留 (3麻用)
-        public static let reserved34 = 34
-        public static let reserved35 = 35
-        public static let reserved36 = 36
+        // 34-36: 打出紅五（萬/筒/索）
+        //
+        // 這三格**不是**保留給三麻的空格。libriichi 的 46 格動作空間裡，
+        // 「打紅五」和「打普通五」是兩個不同的選項（見 `discardCandidatesAka()`）：
+        // 手上那張五只有紅五時，mask[4]=0、mask[34]=1；兩張都有時兩格都是 1。
+        //
+        // 因此掃描「有沒有可打的牌」必須含 34-36，用 `discardEnd`（33）當上界
+        // 會在「唯一合法打牌是紅五」時判成沒有打牌選項。要含紅五請用
+        // `discardAkaEnd`。
+        public static let akaDiscardMan5 = 34
+        public static let akaDiscardPin5 = 35
+        public static let akaDiscardSou5 = 36
+
+        /// 含紅五的打牌索引上界（掃 mask 找打牌候選時用這個）
+        public static let discardAkaEnd = 36
 
         // 37: 立直
         public static let riichi = 37

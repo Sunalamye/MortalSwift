@@ -305,6 +305,11 @@ extension PlayerState {
         scores[relActor] -= 1000
         kyotaku += 1
 
+        // 分數動了，順位就要跟著動。
+        // 原本只在開局算一次，立直付出的 1000 點不會反映到 rank 那 4 格；
+        // 四家同分時自己立直就會從「暫定第一」掉到最後，obs 卻還停在第一。
+        updateRank()
+
         // 開啟一發
         if relActor == 0 {
             atIppatsu = true
@@ -728,10 +733,23 @@ extension PlayerState {
 
     // MARK: - Helper Methods
 
+    /// 見過的牌
+    ///
+    /// 紅五跟著一起記：`akasSeen` 是「這張紅五已經現身、不在牌山裡」，
+    /// 不是「已經有人打出來」。自己配牌／摸到的紅五同樣算現身——
+    /// 只在別人打出來時才記，會讓 `doras_unseen` 這格多算一張，
+    /// 也會讓單人期望值推演以為那張紅五還能摸得到（`akasInWall`）。
     private func markTileSeen(_ tile: Tile) {
         let idx = tile.deaka.index
         if idx >= 0 && idx < 34 {
             tilesSeen[idx] += 1
+        }
+
+        switch tile {
+        case .man(5, red: true): akasSeen[0] = true
+        case .pin(5, red: true): akasSeen[1] = true
+        case .sou(5, red: true): akasSeen[2] = true
+        default: break
         }
     }
 

@@ -18,28 +18,22 @@ public struct ActionDecoder {
     public static func decode(actionIdx: Int, state: PlayerState) -> MJAIAction? {
         let actor = state.playerId
 
-        // 打牌 (0-33)
-        if actionIdx >= 0 && actionIdx <= 33 {
-            guard let baseTile = Tile.fromIndex(actionIdx) else { return nil }
+        // 打牌 (0-36)
+        //
+        // 34-36 是「打出紅五萬／紅五筒／紅五索」，不是保留格。
+        // libriichi 的 46 格動作空間把紅五與普通五當成兩個不同的打牌選項
+        // （見 `PlayerState.discardCandidatesAka()`）：手上那張五只有紅五時，
+        // mask[4]=0、mask[34]=1。少了 34-36 的分支，就會在「唯一合法動作是
+        // 打紅五」的局面回 nil，呼叫端當成不需要動作，bot 靜默停手等到逾時。
+        if actionIdx >= PlayerState.ActionIndex.discardStart
+            && actionIdx <= PlayerState.ActionIndex.discardAkaEnd {
+            guard let tile = discardTile(actionIdx: actionIdx, state: state) else { return nil }
 
-            // 確認手中有這張牌
-            guard state.tehai[actionIdx] > 0 else { return nil }
-
-            // 決定打出哪張牌 (考慮紅寶牌)
-            let tile: Tile
-            if actionIdx == 4 && state.akasInHand[0] {
-                // 優先打出非紅五萬
-                tile = state.tehai[4] > 1 ? baseTile : .man(5, red: true)
-            } else if actionIdx == 13 && state.akasInHand[1] {
-                tile = state.tehai[13] > 1 ? baseTile : .pin(5, red: true)
-            } else if actionIdx == 22 && state.akasInHand[2] {
-                tile = state.tehai[22] > 1 ? baseTile : .sou(5, red: true)
-            } else {
-                tile = baseTile
-            }
-
-            // 判斷是否摸切
-            let tsumogiri = state.lastSelfTsumo?.deaka.index == actionIdx
+            // 摸切 = 打出去的正是剛摸進來的**那一張**。
+            // 必須連紅寶牌一起比：摸紅五卻手切普通五（或反過來）都不是摸切。
+            // 只比 deaka 索引會把這兩種情形標成摸切，下游照摸切的位置抽牌，
+            // 實際打出去的就不是這張牌。
+            let tsumogiri = state.lastSelfTsumo == tile
 
             return .dahai(DahaiAction(actor: actor, pai: tile, tsumogiri: tsumogiri))
         }
@@ -161,6 +155,48 @@ public struct ActionDecoder {
     }
 
     // MARK: - Helper Methods
+
+    /// 打牌索引 → 實際打出的那一張牌
+    ///
+    /// - 0-33：普通牌；索引 4/13/22（五萬/五筒/五索）在「手上那張五只有紅五」時
+    ///   回紅五。這格的 mask 在那種情況下本來就是 0，之所以還是給牌而不是回 nil，
+    ///   是因為呼叫端若忽略 mask 硬選了這格，打出紅五仍是合法且唯一可能的解讀，
+    ///   比回 nil 讓 bot 停手好。
+    /// - 34-36：紅五萬／紅五筒／紅五索；手上沒有對應紅五就是無效索引。
+    private static func discardTile(actionIdx: Int, state: PlayerState) -> Tile? {
+        switch actionIdx {
+        case PlayerState.ActionIndex.akaDiscardMan5:
+            return akaTile(normal: 4, slot: 0, aka: .man(5, red: true), state: state)
+        case PlayerState.ActionIndex.akaDiscardPin5:
+            return akaTile(normal: 13, slot: 1, aka: .pin(5, red: true), state: state)
+        case PlayerState.ActionIndex.akaDiscardSou5:
+            return akaTile(normal: 22, slot: 2, aka: .sou(5, red: true), state: state)
+        default:
+            break
+        }
+
+        // 確認手中有這張牌
+        guard let baseTile = Tile.fromIndex(actionIdx), state.tehai[actionIdx] > 0 else {
+            return nil
+        }
+
+        switch actionIdx {
+        case 4 where state.akasInHand[0] && state.tehai[4] == 1:
+            return .man(5, red: true)
+        case 13 where state.akasInHand[1] && state.tehai[13] == 1:
+            return .pin(5, red: true)
+        case 22 where state.akasInHand[2] && state.tehai[22] == 1:
+            return .sou(5, red: true)
+        default:
+            return baseTile
+        }
+    }
+
+    /// 紅五格的取牌：手上真的有那張紅五才算數
+    private static func akaTile(normal: Int, slot: Int, aka: Tile, state: PlayerState) -> Tile? {
+        guard state.akasInHand[slot], state.tehai[normal] > 0 else { return nil }
+        return aka
+    }
 
     /// 解析吃牌的具體牌張 (考慮紅寶牌)
     private static func resolveConsumedTiles(_ consumed: [Tile], state: PlayerState) -> [Tile] {
