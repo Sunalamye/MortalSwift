@@ -223,6 +223,67 @@ private func dahaiOf(_ action: MJAIAction?) -> DahaiAction? {
     #expect(aka.tsumogiri == false, "摸普通五卻打紅五＝手切")
 }
 
+// MARK: - 加槓與紅五
+
+private func kakanOf(_ action: MJAIAction?) -> KakanAction? {
+    if case .kakan(let k) = action { return k }
+    return nil
+}
+
+/// 碰進紅五、之後摸到第四張普通五加槓：
+/// consumed 必須是**原碰那三張**（含紅五），pai 是手上那張普通五。
+@Test func kakanConsumedKeepsAkaFromOriginalPon() {
+    let state = PlayerState(playerId: 0)
+    feed(state, [
+        startGame,
+        startKyoku(tehai: ["5mr", "5m", "1m", "2m", "3m", "1p", "2p", "3p",
+                           "1s", "2s", "3s", "E", "E"]),
+        #"{"type":"tsumo","actor":3,"pai":"?"}"#,
+        #"{"type":"dahai","actor":3,"pai":"5m","tsumogiri":true}"#,
+        #"{"type":"pon","actor":0,"target":3,"pai":"5m","consumed":["5mr","5m"]}"#,
+        #"{"type":"dahai","actor":0,"pai":"E","tsumogiri":false}"#,
+        #"{"type":"tsumo","actor":1,"pai":"?"}"#,
+        #"{"type":"dahai","actor":1,"pai":"9p","tsumogiri":true}"#,
+        #"{"type":"tsumo","actor":0,"pai":"5m"}"#,
+    ])
+
+    guard let kakan = kakanOf(ActionDecoder.decode(actionIdx: PlayerState.ActionIndex.kan,
+                                                   state: state)) else {
+        Issue.record("decode(kan) 應該是加槓")
+        return
+    }
+    #expect(kakan.pai == .man(5), "紅五已在碰裡，手上剩的第四張是普通五")
+    #expect(kakan.consumed.map(\.mjaiString).sorted() == ["5m", "5m", "5mr"],
+            "consumed 是原碰三張（含紅五），實得 \(kakan.consumed.map(\.mjaiString))")
+}
+
+/// 反過來：碰的是三張普通五、紅五還在手上——加槓宣告的那張就是紅五
+@Test func kakanPaiIsAkaWhenAkaStillInHand() {
+    let state = PlayerState(playerId: 0)
+    feed(state, [
+        startGame,
+        startKyoku(tehai: ["5m", "5m", "1m", "2m", "3m", "1p", "2p", "3p",
+                           "1s", "2s", "3s", "E", "E"]),
+        #"{"type":"tsumo","actor":3,"pai":"?"}"#,
+        #"{"type":"dahai","actor":3,"pai":"5m","tsumogiri":true}"#,
+        #"{"type":"pon","actor":0,"target":3,"pai":"5m","consumed":["5m","5m"]}"#,
+        #"{"type":"dahai","actor":0,"pai":"E","tsumogiri":false}"#,
+        #"{"type":"tsumo","actor":1,"pai":"?"}"#,
+        #"{"type":"dahai","actor":1,"pai":"9p","tsumogiri":true}"#,
+        #"{"type":"tsumo","actor":0,"pai":"5mr"}"#,
+    ])
+
+    guard let kakan = kakanOf(ActionDecoder.decode(actionIdx: PlayerState.ActionIndex.kan,
+                                                   state: state)) else {
+        Issue.record("decode(kan) 應該是加槓")
+        return
+    }
+    #expect(kakan.pai == .man(5, red: true),
+            "手上那張就是紅五，宣告普通五會讓 handleKakan 移錯牌、紅五旗標殘留")
+    #expect(kakan.consumed.map(\.mjaiString) == ["5m", "5m", "5m"],
+            "原碰三張都是普通五")
+}
+
 // MARK: - 索引常量
 
 /// `ActionIndex` 的 34-36 是紅五，不是「保留給三麻」

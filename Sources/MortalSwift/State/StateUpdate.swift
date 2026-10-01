@@ -317,6 +317,12 @@ extension PlayerState {
     private func handleReach(_ event: ReachEvent) {
         let relActor = toRelative(event.actor)
         riichiDeclared[relActor] = true
+        // 自家宣言後 MJAI 不會再送事件要求打牌（與吃碰後同一種缺口）。
+        // 打開 canDiscard 讓 `inferCurrentState()` 能補這一手——
+        // 候選集合由 discardCandidatesAka() 依「宣言中」限縮成不破壞聽牌的打牌。
+        if relActor == 0 {
+            lastCans.canDiscard = true
+        }
     }
 
     private func handleReachAccepted(_ event: ReachAcceptedEvent) {

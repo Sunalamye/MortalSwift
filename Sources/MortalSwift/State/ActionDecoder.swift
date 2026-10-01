@@ -79,7 +79,7 @@ public struct ActionDecoder {
             let targetActor = state.toAbsolute(state.lastCans.targetActor)
 
             // 取得碰的兩張牌
-            let consumed = getPonConsumed(tile: targetTile, state: state)
+            let consumed = consumedTiles(tile: targetTile, count: 2, state: state)
 
             return .pon(PonAction(
                 actor: actor,
@@ -96,7 +96,7 @@ public struct ActionDecoder {
                 // 大明槓
                 guard let targetTile = state.lastKawaTile else { return nil }
                 let targetActor = state.toAbsolute(state.lastCans.targetActor)
-                let consumed = getDaiminkanConsumed(tile: targetTile, state: state)
+                let consumed = consumedTiles(tile: targetTile, count: 3, state: state)
 
                 return .daiminkan(DaiminkanAction(
                     actor: actor,
@@ -107,7 +107,7 @@ public struct ActionDecoder {
             } else if state.lastCans.canAnkan && !state.ankanCandidates.isEmpty {
                 // 暗槓
                 let tile = state.ankanCandidates[0]
-                let consumed = getAnkanConsumed(tile: tile, state: state)
+                let consumed = consumedTiles(tile: tile, count: 4, state: state)
 
                 return .ankan(AnkanAction(actor: actor, consumed: consumed))
             } else if state.lastCans.canKakan && !state.kakanCandidates.isEmpty {
@@ -115,7 +115,9 @@ public struct ActionDecoder {
                 let tile = state.kakanCandidates[0]
                 let consumed = getKakanConsumed(tile: tile, state: state)
 
-                return .kakan(KakanAction(actor: actor, pai: tile, consumed: consumed))
+                return .kakan(KakanAction(actor: actor,
+                                          pai: kakanPai(candidate: tile, state: state),
+                                          consumed: consumed))
             }
             return nil
         }
@@ -180,16 +182,11 @@ public struct ActionDecoder {
             return nil
         }
 
-        switch actionIdx {
-        case 4 where state.akasInHand[0] && state.tehai[4] == 1:
-            return .man(5, red: true)
-        case 13 where state.akasInHand[1] && state.tehai[13] == 1:
-            return .pin(5, red: true)
-        case 22 where state.akasInHand[2] && state.tehai[22] == 1:
-            return .sou(5, red: true)
-        default:
-            return baseTile
+        if let aka = akaTriples.first(where: { $0.index == actionIdx }),
+           state.akasInHand[aka.slot], state.tehai[actionIdx] == 1 {
+            return aka.tile
         }
+        return baseTile
     }
 
     /// 紅五格的取牌：手上真的有那張紅五才算數
@@ -198,147 +195,50 @@ public struct ActionDecoder {
         return aka
     }
 
-    /// 解析吃牌的具體牌張 (考慮紅寶牌)
+    /// 紅五三元組：(普通索引, `akasInHand` slot, 紅五牌)
+    private static let akaTriples: [(index: Int, slot: Int, tile: Tile)] = [
+        (4, 0, .man(5, red: true)),
+        (13, 1, .pin(5, red: true)),
+        (22, 2, .sou(5, red: true)),
+    ]
+
+    /// 解析吃牌的具體牌張（手上有紅五就用紅五）
     private static func resolveConsumedTiles(_ consumed: [Tile], state: PlayerState) -> [Tile] {
-        var result: [Tile] = []
-
-        for tile in consumed {
-            let idx = tile.deaka.index
-
-            // 檢查是否應該使用紅寶牌
-            var usedRed = false
-            if idx == 4 && state.akasInHand[0] {
-                // 5萬
-                result.append(.man(5, red: true))
-                usedRed = true
-            } else if idx == 13 && state.akasInHand[1] {
-                // 5筒
-                result.append(.pin(5, red: true))
-                usedRed = true
-            } else if idx == 22 && state.akasInHand[2] {
-                // 5索
-                result.append(.sou(5, red: true))
-                usedRed = true
-            }
-
-            if !usedRed {
-                result.append(tile)
-            }
+        consumed.map { tile in
+            guard let aka = akaTriples.first(where: { $0.index == tile.deaka.index }),
+                  state.akasInHand[aka.slot] else { return tile }
+            return aka.tile
         }
-
-        return result
     }
 
-    /// 取得碰牌的兩張牌
-    private static func getPonConsumed(tile: Tile, state: PlayerState) -> [Tile] {
+    /// 碰（2 張）／大明槓（3 張）／暗槓（4 張）從手上出的牌：手上有紅五就用掉它
+    private static func consumedTiles(tile: Tile, count: Int, state: PlayerState) -> [Tile] {
         let idx = tile.deaka.index
-        var consumed: [Tile] = []
-
-        // 檢查紅寶牌
-        var hasAka = false
-        switch idx {
-        case 4: hasAka = state.akasInHand[0]
-        case 13: hasAka = state.akasInHand[1]
-        case 22: hasAka = state.akasInHand[2]
-        default: break
+        var tiles = [Tile](repeating: Tile.fromIndex(idx) ?? tile.deaka, count: count)
+        if let aka = akaTriples.first(where: { $0.index == idx }),
+           state.akasInHand[aka.slot], state.tehai[idx] >= count {
+            tiles[0] = aka.tile
         }
-
-        if hasAka && state.tehai[idx] >= 2 {
-            // 用一張紅五和一張普通五
-            switch idx {
-            case 4:
-                consumed = [.man(5, red: true), .man(5)]
-            case 13:
-                consumed = [.pin(5, red: true), .pin(5)]
-            case 22:
-                consumed = [.sou(5, red: true), .sou(5)]
-            default:
-                break
-            }
-        } else {
-            // 用兩張普通牌
-            let baseTile = Tile.fromIndex(idx) ?? tile.deaka
-            consumed = [baseTile, baseTile]
-        }
-
-        return consumed
+        return tiles
     }
 
-    /// 取得大明槓的三張牌
-    private static func getDaiminkanConsumed(tile: Tile, state: PlayerState) -> [Tile] {
-        let idx = tile.deaka.index
-        var consumed: [Tile] = []
-
-        let baseTile = Tile.fromIndex(idx) ?? tile.deaka
-
-        // 檢查紅寶牌
-        var hasAka = false
-        switch idx {
-        case 4: hasAka = state.akasInHand[0]
-        case 13: hasAka = state.akasInHand[1]
-        case 22: hasAka = state.akasInHand[2]
-        default: break
-        }
-
-        if hasAka {
-            switch idx {
-            case 4:
-                consumed = [.man(5, red: true), .man(5), .man(5)]
-            case 13:
-                consumed = [.pin(5, red: true), .pin(5), .pin(5)]
-            case 22:
-                consumed = [.sou(5, red: true), .sou(5), .sou(5)]
-            default:
-                break
-            }
-        } else {
-            consumed = [baseTile, baseTile, baseTile]
-        }
-
-        return consumed
-    }
-
-    /// 取得暗槓的四張牌
-    private static func getAnkanConsumed(tile: Tile, state: PlayerState) -> [Tile] {
-        let idx = tile.deaka.index
-        var consumed: [Tile] = []
-
-        let baseTile = Tile.fromIndex(idx) ?? tile.deaka
-
-        // 檢查紅寶牌
-        var hasAka = false
-        switch idx {
-        case 4: hasAka = state.akasInHand[0]
-        case 13: hasAka = state.akasInHand[1]
-        case 22: hasAka = state.akasInHand[2]
-        default: break
-        }
-
-        if hasAka {
-            switch idx {
-            case 4:
-                consumed = [.man(5, red: true), .man(5), .man(5), .man(5)]
-            case 13:
-                consumed = [.pin(5, red: true), .pin(5), .pin(5), .pin(5)]
-            case 22:
-                consumed = [.sou(5, red: true), .sou(5), .sou(5), .sou(5)]
-            default:
-                break
-            }
-        } else {
-            consumed = [baseTile, baseTile, baseTile, baseTile]
-        }
-
-        return consumed
-    }
-
-    /// 取得加槓的原碰牌
+    /// 加槓的 consumed 是**原碰那三張**——含不含紅五是碰當下的事實，
+    /// 記在 `fuuroOverview`，不能拿現在的手牌重算
     private static func getKakanConsumed(tile: Tile, state: PlayerState) -> [Tile] {
-        // 加槓需要返回原來碰的三張牌
         let idx = tile.deaka.index
-        let baseTile = Tile.fromIndex(idx) ?? tile.deaka
+        if let meld = state.fuuroOverview[0].first(where: { meld in
+            meld.count == 3 && meld.allSatisfy { $0.deaka.index == idx }
+        }) {
+            return meld
+        }
+        return [Tile](repeating: Tile.fromIndex(idx) ?? tile.deaka, count: 3)
+    }
 
-        // 簡化處理：返回三張一樣的牌
-        return [baseTile, baseTile, baseTile]
+    /// 加槓宣告的牌＝手上剩的那一張：紅五旗標還亮著它就是紅五。
+    /// 宣告成普通五會讓 `handleKakan` 移錯牌、`akasInHand` 殘留
+    private static func kakanPai(candidate: Tile, state: PlayerState) -> Tile {
+        guard let aka = akaTriples.first(where: { $0.index == candidate.deaka.index }),
+              state.akasInHand[aka.slot] else { return candidate }
+        return aka.tile
     }
 }

@@ -15,6 +15,11 @@ let package = Package(
             name: "MortalSwift",
             targets: ["MortalSwift"]
         ),
+        // mjai 橋 CLI：stdin/stdout JSON lines，供 mahjax 蒸餾收資料
+        .executable(
+            name: "mjai-bridge",
+            targets: ["MJAIBridge"]
+        ),
     ],
     targets: [
         // 主要 Swift target - 純 Swift 實現
@@ -28,6 +33,12 @@ let package = Package(
                 .copy("Resources/shanten_suhai.bin.gz"),
                 .copy("Resources/shanten_jihai.bin.gz"),
             ]
+        ),
+
+        .executableTarget(
+            name: "MJAIBridge",
+            dependencies: ["MortalSwift"],
+            path: "Sources/MJAIBridge"
         ),
 
         // ── 僅供測試的 libriichi oracle ───────────────────────────────

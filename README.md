@@ -1,6 +1,6 @@
 # MortalSwift
 
-[![Version](https://img.shields.io/badge/version-0.5.2-blue.svg)](https://github.com/Sunalamye/MortalSwift/releases)
+[![Version](https://img.shields.io/badge/version-0.5.3-blue.svg)](https://github.com/Sunalamye/MortalSwift/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%2013%2B%20%7C%20iOS%2016%2B-lightgrey.svg)](https://github.com/Sunalamye/MortalSwift)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
 
@@ -46,7 +46,7 @@ xcframework 純粹是測試時的基準。
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/Sunalamye/MortalSwift.git", from: "0.5.2")
+    .package(url: "https://github.com/Sunalamye/MortalSwift.git", from: "0.5.3")
 ]
 ```
 
@@ -311,7 +311,7 @@ swift test -c release   # 效能數字要看這個
 
 ## 更新日誌
 
-### v0.5.2
+### v0.5.3
 
 - **打紅五有自己的動作索引**（34–36）：先前解碼只認 0–33，手上有紅五時會打出
   普通五或直接解不出來
