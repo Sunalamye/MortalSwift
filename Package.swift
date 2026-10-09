@@ -15,6 +15,11 @@ let package = Package(
             name: "MortalSwift",
             targets: ["MortalSwift"]
         ),
+        // Akagi 三麻 BC 模型推論，純 Swift
+        .library(
+            name: "AkagiSanma",
+            targets: ["AkagiSanma"]
+        ),
         // mjai 橋 CLI：stdin/stdout JSON lines，供 mahjax 蒸餾收資料
         .executable(
             name: "mjai-bridge",
@@ -32,6 +37,17 @@ let package = Package(
                 // 向聽查表（見 ShantenTable.swift）
                 .copy("Resources/shanten_suhai.bin.gz"),
                 .copy("Resources/shanten_jihai.bin.gz"),
+            ]
+        ),
+
+        .target(
+            name: "AkagiSanma",
+            dependencies: ["MortalSwift"],
+            path: "Sources/AkagiSanma",
+            exclude: ["akagi-sanma-implementation-notes.md"],
+            resources: [
+                .copy("Resources/akagi3p.safetensors"),
+                .copy("LICENSE-Akagi.txt"),
             ]
         ),
 
@@ -72,6 +88,12 @@ let package = Package(
         .testTarget(
             name: "MortalSwiftTests",
             dependencies: ["MortalSwift", "CLibRiichi"]
+        ),
+
+        .testTarget(
+            name: "AkagiSanmaTests",
+            dependencies: ["AkagiSanma"],
+            resources: [.copy("Fixtures")]
         ),
     ]
 )
