@@ -1,6 +1,6 @@
 # MortalSwift
 
-[![Version](https://img.shields.io/badge/version-0.5.3-blue.svg)](https://github.com/Sunalamye/MortalSwift/releases)
+[![Version](https://img.shields.io/badge/version-0.6.0-blue.svg)](https://github.com/Sunalamye/MortalSwift/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%2013%2B%20%7C%20iOS%2016%2B-lightgrey.svg)](https://github.com/Sunalamye/MortalSwift)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
 
@@ -46,7 +46,7 @@ xcframework 純粹是測試時的基準。
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/Sunalamye/MortalSwift.git", from: "0.5.3")
+    .package(url: "https://github.com/Sunalamye/MortalSwift.git", from: "0.6.0")
 ]
 ```
 
@@ -303,13 +303,28 @@ swift test -c release   # 效能數字要看這個
 | Swift | 5.9+ |
 | 架構 | Apple Silicon（Core ML 模型需要 Neural Engine） |
 
-**只支援四人麻將。** 三麻的 observation 是 `775 × 34`、動作空間 44，
-結構完全不同；而且公開管道找不到訓練好的三麻權重
-（詳見[模型來源紀錄](docs/decisions/model-provenance.md)）。
+**`MortalSwift` 本身只支援四人麻將。** 三麻的 Mortal observation 是 `775 × 34`、動作空間 44，
+結構完全不同，公開管道也沒有訓練好的 Mortal 三麻權重
+（詳見[模型來源紀錄](docs/decisions/model-provenance.md)）。三麻改由同 package 的
+**`AkagiSanma`** target 提供：純 Swift 移植 Akagi v3 的行為克隆模型（Apache 2.0，
+37×27 observation、60 動作），強度是「default strength」（模仿天鳳人類），不是 Mortal 等級。
+詳見 `Sources/AkagiSanma/akagi-sanma-implementation-notes.md`。
 
 ---
 
 ## 更新日誌
+
+### v0.6.0
+
+- **新增 `AkagiSanma` target**：純 Swift 三麻推論引擎，移植 Akagi v3 `native_bot`
+  （tiles／obs／action codec／model／state／legal／engine），權重 `akagi3p.safetensors`
+  隨 target 發布（Apache 2.0，附 LICENSE-Akagi.txt）
+- 合法動作由引擎自算實體動作，和牌／立直／副露／拔北是否允許交給呼叫端授權
+  （`decide(authorized:)`）；不含役判定
+- 對 Akagi Rust 引擎 1985 個決策點 obs／mask／logits／動作逐欄一致（fixtures 在
+  `Tests/AkagiSanmaTests/Fixtures/s1a/`）；巡目與立直宣言牌四個觀測面依 Akagi
+  重播路徑恆為 0
+- `MortalSwift` target 無變更
 
 ### v0.5.3
 

@@ -6,7 +6,7 @@
 import Foundation
 
 /// Library version
-public let MortalSwiftVersion = "0.5.3"
+public let MortalSwiftVersion = "0.6.0"
 
 /// `NativeMortalBot` 的相容別名
 ///
